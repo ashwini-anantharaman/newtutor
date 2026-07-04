@@ -1,7 +1,9 @@
 import { getAccessToken } from "./supabase";
 import type { DashboardPayload } from "../types/dashboard";
 
-const BASE = "/api";
+/** In production set VITE_API_URL to your Render backend (no trailing slash). */
+const API_ROOT = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+const BASE = `${API_ROOT}/api`;
 
 import { formatSourceDetail } from "./format";
 
