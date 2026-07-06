@@ -26,24 +26,8 @@ import {
   flashcardsFromBlock,
   testFromBlock,
 } from "../components/student-lesson/lessonBlocks";
-import type { LessonMcq } from "../components/student-lesson/steps/LessonQuizStep";
-import {
-  sectionsFromTextContent,
-  isPlaceholderMcq,
-  type StudySection,
-} from "../lib/study-sections";
-import type { TestBlockContent } from "../types";
 
 const LESSON_STEP_COUNT = 7;
-
-function mcqsNeedRegeneration(mcqs: LessonMcq[]): boolean {
-  return !mcqs.length || mcqs.some((m) => isPlaceholderMcq(m.options));
-}
-
-function testNeedsRegeneration(content: TestBlockContent | null): boolean {
-  if (!content?.questions?.length) return true;
-  return content.questions.some((q) => isPlaceholderMcq(q.options));
-}
 
 export function StudentConceptScreen() {
   const {
@@ -79,7 +63,6 @@ export function StudentConceptScreen() {
   const [modeContent, setModeContent] = useState<{
     heading: string;
     body: string[];
-    sections?: StudySection[];
     citation?: string;
   } | null>(null);
   const [modeLoading, setModeLoading] = useState(false);
@@ -108,20 +91,12 @@ export function StudentConceptScreen() {
     setModeLoading(true);
     Agents.conceptTutor
       .getModeContent(courseId, concept.name, contentMode, concept.subtitle)
-      .then((c) =>
-        setModeContent(
-          c as { heading: string; body: string[]; sections?: StudySection[]; citation?: string }
-        )
-      )
+      .then((c) => setModeContent(c as { heading: string; body: string[]; citation?: string }))
       .catch(console.error)
       .finally(() => setModeLoading(false));
   }, [courseId, conceptId, contentMode, concept?.name, concept?.subtitle, hasTextBlock, modeSwitched]);
 
   const [lessonStep, setLessonStep] = useState(0);
-  const [quizMcqs, setQuizMcqs] = useState<LessonMcq[]>([]);
-  const [quizLoading, setQuizLoading] = useState(false);
-  const [liveTestContent, setLiveTestContent] = useState<TestBlockContent | null>(null);
-  const [testLoading, setTestLoading] = useState(false);
   const [quizDone, setQuizDone] = useState(false);
   const [unitTestDone, setUnitTestDone] = useState(false);
   const [reflectionText, setReflectionText] = useState("");
@@ -138,8 +113,6 @@ export function StudentConceptScreen() {
     setChatOpen(false);
     setLessonStep(0);
     setQuizDone(false);
-    setQuizMcqs([]);
-    setLiveTestContent(null);
     setUnitTestDone(false);
     setReflectionText("");
     setShowCompleteModal(false);
@@ -153,94 +126,22 @@ export function StudentConceptScreen() {
       return {
         heading: modeContent.heading,
         body: modeContent.body,
-        sections: modeContent.sections?.length
-          ? modeContent.sections
-          : sectionsFromTextContent(
-              { body: modeContent.body },
-              concept?.name ?? "Lesson"
-            ),
       };
     }
     if (hasTextBlock && textBlocks[0]) {
       const c = textBlocks[0].content as Record<string, unknown>;
-      const sections = sectionsFromTextContent(c, concept?.name ?? "Lesson");
-      const body = sections.map((s) => s.text);
+      const rawBody = Array.isArray(c.body) ? (c.body as string[]) : [String(c.body ?? "")].filter(Boolean);
+      const body = rawBody.map((p) => p.replace(/\\n/g, "\n").replace(/\\t/g, "\t").trim());
       return {
         heading: (c.heading as string) ?? concept?.name ?? "Lesson",
         body,
-        sections,
       };
     }
     return {
       heading: concept?.name ?? "Lesson",
       body: [concept?.subtitle ?? "Loading lesson content…"],
-      sections: sectionsFromTextContent(
-        { body: [concept?.subtitle ?? "Loading lesson content…"] },
-        concept?.name ?? "Lesson"
-      ),
     };
   }, [hasTextBlock, textBlocks, modeContent, modeSwitched, concept]);
-
-  useEffect(() => {
-    if (lessonStep !== 3 || !courseId || !concept) return;
-    if (!mcqsNeedRegeneration(seedMcqs)) {
-      setQuizMcqs(seedMcqs);
-      return;
-    }
-    let cancelled = false;
-    setQuizLoading(true);
-    Agents.conceptTutor
-      .generateLessonQuizSet(courseId, concept.name)
-      .then((res) => {
-        if (cancelled) return;
-        const questions = (res.questions ?? []).map((q, i) => ({
-          id: q.id ?? `gen-${i}`,
-          question: q.question,
-          options: q.options,
-          correct: q.correct,
-          hints: q.hints,
-          explanation: q.explanation,
-        }));
-        setQuizMcqs(questions.length ? questions : seedMcqs);
-      })
-      .catch(() => {
-        if (!cancelled) setQuizMcqs(seedMcqs);
-      })
-      .finally(() => {
-        if (!cancelled) setQuizLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [lessonStep, courseId, concept?.name, seedMcqs]);
-
-  useEffect(() => {
-    if (lessonStep !== 6 || !courseId || !concept) return;
-    if (!testNeedsRegeneration(testContent)) {
-      setLiveTestContent(testContent);
-      return;
-    }
-    let cancelled = false;
-    setTestLoading(true);
-    Agents.conceptTutor
-      .generateTest(courseId, concept.name)
-      .then((res) => {
-        if (cancelled) return;
-        setLiveTestContent(res as TestBlockContent);
-      })
-      .catch(() => {
-        if (!cancelled) setLiveTestContent(testContent);
-      })
-      .finally(() => {
-        if (!cancelled) setTestLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [lessonStep, courseId, concept?.name, testContent]);
-
-  const activeQuizMcqs = quizMcqs.length ? quizMcqs : seedMcqs;
-  const activeTestContent = liveTestContent ?? testContent;
 
   const switchMode = (m: OwlwiseMode) => {
     if (!availableOwlModes.includes(m) || m === owlMode) return;
@@ -418,7 +319,7 @@ export function StudentConceptScreen() {
         <StudyStep
           conceptName={concept.name}
           heading={textContent.heading}
-          sections={textContent.sections}
+          body={textContent.body}
           loading={modeLoading}
           mode={owlMode}
           availableModes={availableOwlModes}
@@ -427,13 +328,9 @@ export function StudentConceptScreen() {
       );
       break;
     case 3:
-      stepContent = quizLoading ? (
-        <p className="text-zinc-500 text-sm text-center animate-pulse">
-          Building quiz questions from your sources…
-        </p>
-      ) : (
+      stepContent = (
         <LessonQuizStep
-          mcqs={activeQuizMcqs}
+          mcqs={seedMcqs}
           conceptId={conceptId}
           conceptName={concept.name}
           onComplete={() => setQuizDone(true)}
@@ -453,13 +350,9 @@ export function StudentConceptScreen() {
       );
       break;
     case 6:
-      stepContent = testLoading ? (
-        <p className="text-zinc-500 text-sm text-center animate-pulse">
-          Building unit test from your sources…
-        </p>
-      ) : activeTestContent ? (
+      stepContent = testContent ? (
         <LessonUnitTestStep
-          content={activeTestContent}
+          content={testContent}
           onSubmitted={() => setUnitTestDone(true)}
         />
       ) : (
@@ -471,9 +364,9 @@ export function StudentConceptScreen() {
   }
 
   useEffect(() => {
-    if (lessonStep === 3 && !quizLoading && !activeQuizMcqs.length) setQuizDone(true);
-    if (lessonStep === 6 && !testLoading && !activeTestContent) setUnitTestDone(true);
-  }, [lessonStep, quizLoading, testLoading, activeQuizMcqs.length, activeTestContent]);
+    if (lessonStep === 3 && seedMcqs.length === 0) setQuizDone(true);
+    if (lessonStep === 6 && !testContent) setUnitTestDone(true);
+  }, [lessonStep, seedMcqs.length, testContent]);
 
   return (
     <>

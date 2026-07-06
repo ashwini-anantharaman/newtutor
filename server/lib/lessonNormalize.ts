@@ -155,12 +155,6 @@ export function normalizeBlueprint(raw: unknown, moduleName: string): LessonBlue
   };
 }
 
-export interface StudySection {
-  concept: string;
-  text: string;
-  check: string;
-}
-
 export function sanitizeLessonText(s: string): string {
   return s
     .replace(/\\n/g, "\n")
@@ -170,8 +164,7 @@ export function sanitizeLessonText(s: string): string {
 }
 
 export function isPlaceholderMcqOption(opt: string): boolean {
-  const t = opt.trim();
-  return /^option\s*[a-d]$/i.test(t) || t.length < 4;
+  return /^option\s*[a-d]$/i.test(opt.trim());
 }
 
 export function isPlaceholderMcq(options: string[]): boolean {
@@ -187,42 +180,6 @@ export function extractBodyFromRaw(raw: unknown): string[] {
     if (arr.length) return arr;
   }
   return [];
-}
-
-export function normalizeStudySections(
-  raw: unknown,
-  moduleName: string,
-  blueprint: LessonBlueprint
-): StudySection[] {
-  const r = asRecord(raw);
-  const list = Array.isArray(r.sections) ? r.sections : [];
-  const sections = list
-    .map((item) => {
-      const o = asRecord(item);
-      const concept = sanitizeLessonText(asString(o.concept, ""));
-      const text = sanitizeLessonText(asString(o.text, ""));
-      const check = sanitizeLessonText(asString(o.check, ""));
-      if (!concept || !text) return null;
-      return {
-        concept,
-        text,
-        check: check || `In your own words, what is the key idea behind ${concept}?`,
-      };
-    })
-    .filter((s): s is StudySection => s !== null);
-
-  if (sections.length) return sections;
-
-  const body = extractBodyFromRaw(raw);
-  const points = blueprint.text.keyPoints.length ? blueprint.text.keyPoints : [moduleName];
-  return points.slice(0, 5).map((point, i) => {
-    const para = sanitizeLessonText(body[i] ?? body[0] ?? `${point} is an important idea in ${moduleName}.`);
-    return {
-      concept: point,
-      text: para,
-      check: `What would you tell a friend about ${point}?`,
-    };
-  });
 }
 
 export function normalizeTextBlock(
@@ -243,12 +200,9 @@ export function normalizeTextBlock(
         `Here's what matters: ${blueprint.text.keyPoints.join(" ")}`,
         `Remember the key term **${blueprint.text.sourceHighlight}** when you review.`,
       ].map(sanitizeLessonText);
-  const sections = normalizeStudySections(raw, moduleName, blueprint);
-  const bodyFromSections = sections.map((s) => s.text);
   return {
     heading: sanitizeLessonText(asString(r.heading, blueprint.text.heading)),
-    body: body.length ? body.map(sanitizeLessonText) : bodyFromSections.length ? bodyFromSections : fallbackBody,
-    sections,
+    body: body.length ? body.map(sanitizeLessonText) : fallbackBody,
     sourceExcerpt: sanitizeLessonText(
       asString(
         r.sourceExcerpt,
@@ -307,7 +261,12 @@ export function normalizeMcqBlock(raw: unknown, moduleName: string) {
 }
 
 export function isValidMcqBlock(mcq: ReturnType<typeof normalizeMcqBlock>): boolean {
-  return Boolean(mcq.question && !isPlaceholderMcq(mcq.options));
+  return Boolean(
+    mcq.question &&
+      mcq.options.length === 4 &&
+      mcq.options.every((o) => o.trim().length > 0) &&
+      !isPlaceholderMcq(mcq.options)
+  );
 }
 
 export function normalizeMcqBlocks(raw: unknown, moduleName: string) {

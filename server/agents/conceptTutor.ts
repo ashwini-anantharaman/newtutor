@@ -8,7 +8,6 @@ import {
   normalizeDraftCourse,
   extractBodyFromRaw,
   isValidMcqBlock,
-  isPlaceholderMcq,
   type LessonBlueprint,
 } from "../lib/lessonNormalize.js";
 import { formatRetrievedContext, getCourseRagStats, retrieveContextForDraft, retrieveContextForLesson, type RagChunk } from "../lib/rag.js";
@@ -177,26 +176,19 @@ export async function generateModeContent(
   mode: string,
   subtitle?: string
 ) {
-  const chunks = await retrieveContextForLesson(courseId, conceptName, { subtitle: `${mode} ${subtitle ?? ""}`, count: 10 });
+  const chunks = await retrieveContextForLesson(courseId, conceptName, { subtitle: `${mode} ${subtitle ?? ""}`, count: 8 });
   const context = formatRetrievedContext(chunks);
-  const modeVoice =
-    mode === "real-world"
-      ? "Use vivid real-world analogies."
-      : mode === "conversational"
-        ? "Use friendly conversational tone."
-        : "Use clear textbook tone.";
   const raw = await claudeJSON<unknown>(
-    `You are the Owlwise Concept Tutor. Rewrite study content for mode "${mode}". ${modeVoice}
-${STUDY_SECTIONS_RULES}`,
-    `Concept module: ${conceptName}\nSubtitle: ${subtitle ?? ""}\n\nRetrieved sources:\n${context}`,
-    4500
+    `You are the Owlwise Concept Tutor. Write explanation content for mode "${mode}" (real-world=analogies, conversational=friendly, textbook=formal).
+Return JSON: { "heading": string, "body": string[], "sourceExcerpt": string, "citation": string }`,
+    `Concept: ${conceptName}\nSubtitle: ${subtitle ?? ""}\n\nRetrieved:\n${context}`,
+    3000
   );
   const blueprint = normalizeBlueprint({ text: { heading: conceptName, keyPoints: [conceptName] } }, conceptName);
   const normalized = normalizeTextBlock(raw, blueprint, conceptName);
   return {
     heading: normalized.heading,
     body: normalized.body,
-    sections: normalized.sections,
     sourceExcerpt: normalized.sourceExcerpt,
     citation: normalized.citation,
   };
@@ -211,36 +203,14 @@ export async function generateMCQ(courseId: string, conceptName: string) {
     correct: number;
     hints: { level: string; text: string }[] | Record<string, string>;
   }>(
-    `Generate ONE multiple-choice question strictly from the instructor sources.${MCQ_SOURCE_RULES}
-Return JSON with question, options (4 strings), correct (0-based index), hints as array: [{ "level": "Nudge"|"Concept"|"Direction"|"Explanation", "text": string }] (4 hints), optional "explanation".`,
-    `Concept: ${conceptName}\n\nSources:\n${context}`,
-    2500
+    `Generate an MCQ from sources. Return JSON with question, options (4), correct (0-based index), hints as an array: [{ "level": "Nudge"|"Concept"|"Direction"|"Explanation", "text": string }].`,
+    `Concept: ${conceptName}\n\n${context}`,
+    2000
   );
-  const normalized = normalizeMcqBlock(raw, conceptName);
-  if (!isValidMcqBlock(normalized)) throw new Error("MCQ generation returned placeholder options");
-  return normalized;
-}
-
-export async function generateLessonQuizSet(courseId: string, conceptName: string) {
-  const chunks = await retrieveContextForLesson(courseId, conceptName, { count: 10 });
-  const context = formatRetrievedContext(chunks);
-  const raw = await claudeJSON<unknown>(
-    `Generate exactly ${LESSON_MCQ_COUNT} distinct multiple-choice questions grounded ONLY in the instructor sources.${MCQ_SOURCE_RULES}
-Return JSON: { "questions": [{ "question", "options" (4 strings), "correct" (0-based), "hints": [{ "level", "text" }] (4 each), "explanation" }] }`,
-    `Module: ${conceptName}\n\nSources:\n${context}`,
-    6000
-  );
-  let mcqs = normalizeMcqBlocks(raw, conceptName).filter(isValidMcqBlock);
-  for (let attempt = 0; mcqs.length < LESSON_MCQ_COUNT && attempt < 3; attempt++) {
-    try {
-      const extra = await generateMCQ(courseId, conceptName);
-      if (!mcqs.some((m) => m.question === extra.question)) mcqs.push(extra);
-    } catch {
-      /* retry */
-    }
-  }
-  if (!mcqs.length) throw new Error("Could not generate source-based quiz questions");
-  return mcqs.slice(0, LESSON_MCQ_COUNT).map((q) => ({ ...q, id: crypto.randomUUID() }));
+  const hints = Array.isArray(raw.hints)
+    ? raw.hints
+    : Object.entries(raw.hints ?? {}).map(([level, text]) => ({ level, text: String(text) }));
+  return { ...raw, hints };
 }
 
 export async function generateAdaptiveMCQ(
@@ -342,29 +312,13 @@ function hasBlueprintContent(raw: unknown): boolean {
 }
 
 function hasTextContent(raw: unknown): boolean {
-  const r = asRecord(raw);
-  if (Array.isArray(r.sections) && r.sections.length > 0) return true;
   return extractBodyFromRaw(raw).length > 0;
 }
 
 const MCQ_SOURCE_RULES = `
-CRITICAL — every option must be a full answer phrase (12–120 characters) grounded in the instructor sources below.
+CRITICAL — every option must be a full answer phrase grounded in the instructor sources below.
 NEVER use "Option A/B/C/D", letter labels, or empty placeholders.
 Write plausible distractors from common misconceptions in the material.`;
-
-const STUDY_SECTIONS_RULES = `
-Return JSON: {
-  "heading": string,
-  "sections": [{ "concept": string, "text": string, "check": string }],
-  "sourceExcerpt": string,
-  "citation": string
-}
-Section rules:
-- Break the module into concept-level sections (newspaper subtopics). ONE concept per section — do not split a concept across sections or combine unrelated concepts.
-- Each "text" is 80–120 words max, conversational, with real-world examples where possible. Bold key terms with **double asterisks**.
-- Each "check" is one short recall question to verify understanding of that section only.
-- Do NOT put literal backslash-n in strings; write flowing prose in "text".
-- Ground every section in the retrieved sources.`;
 
 function isGenericPlaceholderBody(body: string[], moduleName: string): boolean {
   return body.length === 3 && body[0]?.startsWith(`${moduleName} is a core idea`);
@@ -424,7 +378,7 @@ async function generateTextBlock(
   blueprint: ModuleLessonBlueprint
 ) {
   const system = `Write the TEXT block for this module lesson grounded in the instructor sources.
-${STUDY_SECTIONS_RULES}`;
+Return JSON: { "heading": string, "body": string[] (3-5 paragraphs), "sourceExcerpt": string, "citation": string }`;
   const trimmedContext = context.length > 12_000 ? `${context.slice(0, 12_000)}\n\n[truncated]` : context;
   const user = `Module: ${moduleName}
 Lesson plan: ${JSON.stringify(blueprint)}
@@ -516,16 +470,19 @@ ${context}`,
 
   for (let i = mcqs.length; i < LESSON_MCQ_COUNT; i++) {
     const focus = uniqueTopics[i] ?? `Further understanding of ${moduleName}`;
-    try {
-      const extra = await generateSingleMCQBlock(moduleName, context, blueprint, focus);
-      if (!isValidMcqBlock(extra)) continue;
-      const key = extra.question.trim().toLowerCase();
-      if (!seen.has(key)) {
+    let added = false;
+    for (let attempt = 0; attempt < 3 && !added; attempt++) {
+      try {
+        const extra = await generateSingleMCQBlock(moduleName, context, blueprint, focus);
+        if (!isValidMcqBlock(extra)) continue;
+        const key = extra.question.trim().toLowerCase();
+        if (seen.has(key)) continue;
         seen.add(key);
         mcqs.push(extra);
+        added = true;
+      } catch (e) {
+        console.warn(`[lesson] Extra MCQ ${i + 1} attempt ${attempt + 1} failed for "${moduleName}":`, e);
       }
-    } catch (e) {
-      console.warn(`[lesson] Extra MCQ ${i + 1} failed for "${moduleName}":`, e);
     }
   }
 
@@ -718,7 +675,6 @@ export async function generateModuleLesson(
       content: {
         heading: text.heading,
         body: text.body,
-        sections: text.sections,
         sourceExcerpt: text.sourceExcerpt,
         citation: text.citation,
         sourceHighlight: text.sourceHighlight ?? blueprint.text.sourceHighlight,

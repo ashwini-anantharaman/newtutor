@@ -66,16 +66,6 @@ router.post("/quiz/generate", requireAuth, async (req: AuthedRequest, res) => {
   }
 });
 
-router.post("/quiz/generate-set", requireAuth, async (req: AuthedRequest, res) => {
-  try {
-    const { courseId, conceptName } = req.body;
-    const result = await conceptTutor.generateLessonQuizSet(courseId, conceptName);
-    res.json({ questions: result });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
 router.post("/quiz/adaptive/generate", requireAuth, async (req: AuthedRequest, res) => {
   try {
     const {
