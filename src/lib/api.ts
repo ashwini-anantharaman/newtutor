@@ -145,6 +145,11 @@ export const AgentAPI = {
       "/agents/quiz/generate",
       { method: "POST", body: JSON.stringify({ courseId, conceptName }) }
     ),
+  generateLessonQuizSet: (courseId: string, conceptName: string) =>
+    api<{ questions: { id?: string; question: string; options: string[]; correct: number; hints: unknown; explanation?: string }[] }>(
+      "/agents/quiz/generate-set",
+      { method: "POST", body: JSON.stringify({ courseId, conceptName }) }
+    ),
   generateAdaptiveMCQ: (body: {
     courseId: string;
     conceptName: string;

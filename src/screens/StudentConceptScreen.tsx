@@ -1,43 +1,48 @@
-import { useState, useEffect, useMemo } from "react";
-import { ArrowLeft, ChevronRight, Check, BookOpen, Columns2, PanelLeftOpen } from "lucide-react";
-import type { ContentBlock, ContentMode } from "../types";
+import { useState, useEffect, useMemo, useCallback, type ReactNode } from "react";
+import type { ContentMode } from "../types";
 import { useApp } from "../store/AppContext";
 import { Agents } from "../agents";
-import { DataAPI } from "../lib/api";
-import { blocksForConcept, StudentContentBlock } from "../lib/content-blocks";
-import { AnimationPanel } from "../components/AnimationPanel";
-import { AdaptiveMCQSession } from "../components/AdaptiveMCQSession";
-import { ReferencePdfViewer } from "../components/ReferencePdfViewer";
+import { blocksForConcept } from "../lib/content-blocks";
 import {
   CONTENT_TO_OWLWISE,
   OWLWISE_TO_CONTENT,
   type OwlwiseMode,
 } from "../constants/owlwiseTheme";
 import { FloatingLessonChat } from "../components/FloatingLessonChat";
-import { IconInteractive, IconSummary, IconNarrative } from "../components/owlwise/ModeIcons";
-import { buildUnitReferencePages } from "../lib/unit-reference";
+import { LessonShell } from "../components/student-lesson/LessonShell";
+import { HookStep } from "../components/student-lesson/steps/HookStep";
+import { deriveHookContent } from "../components/student-lesson/hookContent";
+import { BuildIntuitionStep } from "../components/student-lesson/steps/BuildIntuitionStep";
+import { StudyStep } from "../components/student-lesson/steps/StudyStep";
+import { LessonQuizStep } from "../components/student-lesson/steps/LessonQuizStep";
+import { LessonFlashcardsStep } from "../components/student-lesson/steps/LessonFlashcardsStep";
+import { LessonReflectionStep } from "../components/student-lesson/steps/LessonReflectionStep";
+import { LessonUnitTestStep } from "../components/student-lesson/steps/LessonUnitTestStep";
+import { UnitCompleteModal } from "../components/student-lesson/UnitCompleteModal";
+import {
+  LESSON_STEP_TAGS,
+  getLessonBlocks,
+  mcqFromBlock,
+  flashcardsFromBlock,
+  testFromBlock,
+} from "../components/student-lesson/lessonBlocks";
+import type { LessonMcq } from "../components/student-lesson/steps/LessonQuizStep";
+import {
+  sectionsFromTextContent,
+  isPlaceholderMcq,
+  type StudySection,
+} from "../lib/study-sections";
+import type { TestBlockContent } from "../types";
 
-const MODE_FONT: Record<OwlwiseMode, string | undefined> = {
-  interactive: undefined,
-  summary: "'PT Serif', Georgia, serif",
-  narrative: "'IBM Plex Mono', monospace",
-};
+const LESSON_STEP_COUNT = 7;
 
-function groupBlocks(blocks: ContentBlock[]): (ContentBlock | { type: "MCQGroup"; blocks: ContentBlock[] })[] {
-  const out: (ContentBlock | { type: "MCQGroup"; blocks: ContentBlock[] })[] = [];
-  const mcqs = blocks.filter((b) => b.type === "MCQ");
-  let mcqPlaced = false;
-  for (const b of blocks) {
-    if (b.type === "MCQ") {
-      if (!mcqPlaced) {
-        out.push({ type: "MCQGroup", blocks: mcqs });
-        mcqPlaced = true;
-      }
-      continue;
-    }
-    out.push(b);
-  }
-  return out;
+function mcqsNeedRegeneration(mcqs: LessonMcq[]): boolean {
+  return !mcqs.length || mcqs.some((m) => isPlaceholderMcq(m.options));
+}
+
+function testNeedsRegeneration(content: TestBlockContent | null): boolean {
+  if (!content?.questions?.length) return true;
+  return content.questions.some((q) => isPlaceholderMcq(q.options));
 }
 
 export function StudentConceptScreen() {
@@ -49,13 +54,10 @@ export function StudentConceptScreen() {
     logModeSwitch,
     concepts,
     courseId,
-    courseTitle,
     modules,
     conceptAvailability,
     updateLearner,
-    lessonPanel,
-    setLessonPanel,
-    ragSources,
+    completeReflection,
   } = useApp();
 
   const concept = concepts.find((c) => c.id === activeConceptId) ?? concepts[0];
@@ -77,6 +79,7 @@ export function StudentConceptScreen() {
   const [modeContent, setModeContent] = useState<{
     heading: string;
     body: string[];
+    sections?: StudySection[];
     citation?: string;
   } | null>(null);
   const [modeLoading, setModeLoading] = useState(false);
@@ -85,67 +88,16 @@ export function StudentConceptScreen() {
     () => (concept ? blocksForConcept(modules, conceptId, concept.name) : []),
     [modules, conceptId, concept]
   );
+
   const textBlocks = conceptBlocks.filter((b) => b.type === "Text");
   const hasTextBlock = textBlocks.length > 0;
-  const grouped = useMemo(
-    () => groupBlocks(conceptBlocks.filter((b) => b.type !== "Text")),
-    [conceptBlocks]
+  const lessonBlocks = useMemo(() => getLessonBlocks(conceptBlocks), [conceptBlocks]);
+  const seedMcqs = useMemo(
+    () => lessonBlocks.mcqs.map(mcqFromBlock).filter((m): m is NonNullable<typeof m> => m !== null),
+    [lessonBlocks.mcqs]
   );
-
-  const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
-  const [pdfName, setPdfName] = useState<string>("");
-  const [pdfLoading, setPdfLoading] = useState(true);
-  const [pdfError, setPdfError] = useState<string | null>(null);
-  const [pdfPageCount, setPdfPageCount] = useState<number | undefined>();
-
-  const pdfPanelVisible =
-    lessonPanel === "split" || lessonPanel === "pdf" || lessonPanel === "transcript";
-
-  const collapsePdf = () => setLessonPanel("notes");
-  const expandPdf = () => setLessonPanel(lessonPanel === "notes" ? "split" : "pdf");
-
-  useEffect(() => {
-    if (!courseId) return;
-    setPdfLoading(true);
-    setPdfError(null);
-    setPdfData(null);
-
-    const load = async () => {
-      try {
-        const { data, name } = await DataAPI.referencePdfBlob(courseId);
-        setPdfData(data);
-        setPdfName(name);
-        return;
-      } catch {
-        /* try individual PDF sources */
-      }
-
-      const pdfs = ragSources.filter((s) => s.type === "PDF" && s.status === "ready");
-      for (const pdf of pdfs) {
-        try {
-          const { data, name } = await DataAPI.sourceFilePdf(pdf.id);
-          setPdfData(data);
-          setPdfName(name);
-          return;
-        } catch {
-          /* try next source */
-        }
-      }
-
-      setPdfError(
-        "No reference PDF found for this course. Your instructor needs to re-upload the PDF so it can display here."
-      );
-    };
-
-    void load().finally(() => setPdfLoading(false));
-  }, [courseId, ragSources]);
-
-  const unitReferencePages = useMemo(
-    () => buildUnitReferencePages(concepts, modules, pdfPageCount),
-    [concepts, modules, pdfPageCount]
-  );
-
-  const referencePage = unitReferencePages[conceptId] ?? 1;
+  const flashcards = useMemo(() => flashcardsFromBlock(lessonBlocks.flashcard), [lessonBlocks.flashcard]);
+  const testContent = useMemo(() => testFromBlock(lessonBlocks.test), [lessonBlocks.test]);
 
   useEffect(() => {
     if (!courseId || !concept) return;
@@ -156,16 +108,41 @@ export function StudentConceptScreen() {
     setModeLoading(true);
     Agents.conceptTutor
       .getModeContent(courseId, concept.name, contentMode, concept.subtitle)
-      .then((c) => setModeContent(c as { heading: string; body: string[]; citation?: string }))
+      .then((c) =>
+        setModeContent(
+          c as { heading: string; body: string[]; sections?: StudySection[]; citation?: string }
+        )
+      )
       .catch(console.error)
       .finally(() => setModeLoading(false));
   }, [courseId, conceptId, contentMode, concept?.name, concept?.subtitle, hasTextBlock, modeSwitched]);
+
+  const [lessonStep, setLessonStep] = useState(0);
+  const [quizMcqs, setQuizMcqs] = useState<LessonMcq[]>([]);
+  const [quizLoading, setQuizLoading] = useState(false);
+  const [liveTestContent, setLiveTestContent] = useState<TestBlockContent | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
+  const [quizDone, setQuizDone] = useState(false);
+  const [unitTestDone, setUnitTestDone] = useState(false);
+  const [reflectionText, setReflectionText] = useState("");
+  const [showCompleteModal, setShowCompleteModal] = useState(false);
+  const [messages, setMessages] = useState<{ from: "ai" | "user"; text: string }[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
   useEffect(() => {
     setModeSwitched(false);
     setModeContent(null);
     setMessages([]);
     setChatOpen(false);
+    setLessonStep(0);
+    setQuizDone(false);
+    setQuizMcqs([]);
+    setLiveTestContent(null);
+    setUnitTestDone(false);
+    setReflectionText("");
+    setShowCompleteModal(false);
   }, [conceptId]);
 
   const conceptIndex = concepts.findIndex((c) => c.id === conceptId);
@@ -176,30 +153,94 @@ export function StudentConceptScreen() {
       return {
         heading: modeContent.heading,
         body: modeContent.body,
-        citation: modeContent.citation,
-        excerpt: undefined as string | undefined,
-        highlight: undefined as string | undefined,
+        sections: modeContent.sections?.length
+          ? modeContent.sections
+          : sectionsFromTextContent(
+              { body: modeContent.body },
+              concept?.name ?? "Lesson"
+            ),
       };
     }
     if (hasTextBlock && textBlocks[0]) {
       const c = textBlocks[0].content as Record<string, unknown>;
-      const body = Array.isArray(c.body) ? (c.body as string[]) : [String(c.body ?? "")].filter(Boolean);
+      const sections = sectionsFromTextContent(c, concept?.name ?? "Lesson");
+      const body = sections.map((s) => s.text);
       return {
         heading: (c.heading as string) ?? concept?.name ?? "Lesson",
         body,
-        citation: c.citation as string | undefined,
-        excerpt: c.sourceExcerpt as string | undefined,
-        highlight: c.sourceHighlight as string | undefined,
+        sections,
       };
     }
     return {
       heading: concept?.name ?? "Lesson",
       body: [concept?.subtitle ?? "Loading lesson content…"],
-      citation: undefined,
-      excerpt: undefined,
-      highlight: undefined,
+      sections: sectionsFromTextContent(
+        { body: [concept?.subtitle ?? "Loading lesson content…"] },
+        concept?.name ?? "Lesson"
+      ),
     };
   }, [hasTextBlock, textBlocks, modeContent, modeSwitched, concept]);
+
+  useEffect(() => {
+    if (lessonStep !== 3 || !courseId || !concept) return;
+    if (!mcqsNeedRegeneration(seedMcqs)) {
+      setQuizMcqs(seedMcqs);
+      return;
+    }
+    let cancelled = false;
+    setQuizLoading(true);
+    Agents.conceptTutor
+      .generateLessonQuizSet(courseId, concept.name)
+      .then((res) => {
+        if (cancelled) return;
+        const questions = (res.questions ?? []).map((q, i) => ({
+          id: q.id ?? `gen-${i}`,
+          question: q.question,
+          options: q.options,
+          correct: q.correct,
+          hints: q.hints,
+          explanation: q.explanation,
+        }));
+        setQuizMcqs(questions.length ? questions : seedMcqs);
+      })
+      .catch(() => {
+        if (!cancelled) setQuizMcqs(seedMcqs);
+      })
+      .finally(() => {
+        if (!cancelled) setQuizLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lessonStep, courseId, concept?.name, seedMcqs]);
+
+  useEffect(() => {
+    if (lessonStep !== 6 || !courseId || !concept) return;
+    if (!testNeedsRegeneration(testContent)) {
+      setLiveTestContent(testContent);
+      return;
+    }
+    let cancelled = false;
+    setTestLoading(true);
+    Agents.conceptTutor
+      .generateTest(courseId, concept.name)
+      .then((res) => {
+        if (cancelled) return;
+        setLiveTestContent(res as TestBlockContent);
+      })
+      .catch(() => {
+        if (!cancelled) setLiveTestContent(testContent);
+      })
+      .finally(() => {
+        if (!cancelled) setTestLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lessonStep, courseId, concept?.name, testContent]);
+
+  const activeQuizMcqs = quizMcqs.length ? quizMcqs : seedMcqs;
+  const activeTestContent = liveTestContent ?? testContent;
 
   const switchMode = (m: OwlwiseMode) => {
     if (!availableOwlModes.includes(m) || m === owlMode) return;
@@ -207,20 +248,6 @@ export function StudentConceptScreen() {
     setModeSwitched(true);
     setOwlMode(m);
   };
-
-  const handleNext = () => {
-    updateLearner({ lastSessionConcept: conceptId });
-    if (nextConcept) {
-      setActiveConceptId(nextConcept.id);
-    } else {
-      setScreen("student-reflection");
-    }
-  };
-
-  const [messages, setMessages] = useState<{ from: "ai" | "user"; text: string }[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatBusy, setChatBusy] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
 
   const sendChat = async () => {
     const q = chatInput.trim();
@@ -243,15 +270,61 @@ export function StudentConceptScreen() {
     }
   };
 
+  const saveReflection = useCallback(
+    async (text: string) => {
+      if (!courseId || !conceptId || !text.trim()) return;
+      try {
+        await Agents.reflection.submitSessionReflection(conceptId, [text], courseId);
+        completeReflection(conceptId);
+      } catch {
+        /* keep local text */
+      }
+    },
+    [courseId, conceptId, completeReflection]
+  );
+
+  const finishUnit = () => {
+    updateLearner({ lastSessionConcept: conceptId });
+    setShowCompleteModal(false);
+    if (nextConcept) {
+      setActiveConceptId(nextConcept.id);
+    } else {
+      setScreen("student-workspace");
+    }
+  };
+
+  const handleContinue = () => {
+    if (lessonStep === 5 && reflectionText.trim()) {
+      void saveReflection(reflectionText);
+    }
+    if (lessonStep === 6 && unitTestDone) {
+      setShowCompleteModal(true);
+      return;
+    }
+    if (lessonStep < LESSON_STEP_COUNT - 1) {
+      setLessonStep((s) => s + 1);
+    }
+  };
+
+  const handleBack = () => {
+    if (lessonStep === 0) {
+      setScreen("student-workspace");
+      return;
+    }
+    setLessonStep((s) => s - 1);
+  };
+
+  const backLabel = lessonStep === 0 ? "Exit lesson" : "Back";
+
   if (!concept) {
     return (
-      <div className="min-h-screen bg-[#f4f7fb] flex items-center justify-center p-8">
+      <div className="min-h-screen bg-black flex items-center justify-center p-8">
         <div className="text-center">
-          <p className="text-sm font-semibold text-gray-600 mb-4">This course has no lessons yet.</p>
+          <p className="text-sm text-zinc-400 mb-4">This course has no lessons yet.</p>
           <button
             type="button"
             onClick={() => setScreen("student-workspace")}
-            className="px-6 py-3 bg-[#1a73e8] text-white rounded-xl text-sm font-semibold"
+            className="px-6 py-3 bg-zinc-200 text-black rounded-full text-sm font-semibold"
           >
             Back to courses
           </button>
@@ -260,216 +333,178 @@ export function StudentConceptScreen() {
     );
   }
 
-  const font = MODE_FONT[owlMode];
+  const conceptNav = useMemo(
+    () =>
+      concepts.map((c) => {
+        const mastery = learner.conceptMastery[c.id];
+        const done = mastery === "mastered" || mastery === "understood";
+        return {
+          id: c.id,
+          name: c.name,
+          status:
+            c.id === conceptId ? ("current" as const) : done ? ("completed" as const) : ("upcoming" as const),
+        };
+      }),
+    [concepts, conceptId, learner.conceptMastery]
+  );
+
+  const hookContent = useMemo(() => {
+    const rawBody = hasTextBlock
+      ? (() => {
+          const c = textBlocks[0].content as Record<string, unknown>;
+          return Array.isArray(c.body) ? (c.body as string[]) : [String(c.body ?? "")].filter(Boolean);
+        })()
+      : textContent.body;
+    const rawHeading = hasTextBlock
+      ? String((textBlocks[0].content as Record<string, unknown>).heading ?? concept?.name ?? "")
+      : textContent.heading;
+    return deriveHookContent({
+      conceptName: concept?.name ?? "this topic",
+      subtitle: concept?.subtitle,
+      heading: rawHeading,
+      body: rawBody,
+    });
+  }, [hasTextBlock, textBlocks, textContent, concept]);
+
+  const animationContent = lessonBlocks.animation?.content as Record<string, unknown> | undefined;
+  const buildTitle =
+    (typeof animationContent?.description === "string" && animationContent.description) ||
+    `Watch how ${concept.name.toLowerCase()} works`;
+  const buildBody =
+    textContent.body[0]?.slice(0, 200) ||
+    concept.subtitle ||
+    "See the core idea in action before we dive deeper.";
+
+  const stepTag = LESSON_STEP_TAGS[lessonStep] ?? "Lesson";
+  const isLightStep = lessonStep === 6;
+  const footerHint =
+    lessonStep === 3 && !quizDone
+      ? "Finish the quiz to continue"
+      : lessonStep === 6 && !unitTestDone
+        ? "Complete the unit test to continue"
+        : "Ready when you are";
+  const continueDisabled =
+    (lessonStep === 3 && !quizDone) || (lessonStep === 6 && !unitTestDone);
+
+  const chat = (
+    <FloatingLessonChat
+      open={chatOpen}
+      onOpenChange={setChatOpen}
+      messages={messages}
+      input={chatInput}
+      onInputChange={setChatInput}
+      onSend={() => void sendChat()}
+      busy={chatBusy}
+      conceptName={concept.name}
+    />
+  );
+
+  let stepContent: ReactNode;
+  switch (lessonStep) {
+    case 0:
+      stepContent = <HookStep headline={hookContent.headline} subtext={hookContent.subtext} />;
+      break;
+    case 1:
+      stepContent = (
+        <BuildIntuitionStep
+          title={buildTitle}
+          body={buildBody}
+          animationBlock={lessonBlocks.animation}
+        />
+      );
+      break;
+    case 2:
+      stepContent = (
+        <StudyStep
+          conceptName={concept.name}
+          heading={textContent.heading}
+          sections={textContent.sections}
+          loading={modeLoading}
+          mode={owlMode}
+          availableModes={availableOwlModes}
+          onModeChange={switchMode}
+        />
+      );
+      break;
+    case 3:
+      stepContent = quizLoading ? (
+        <p className="text-zinc-500 text-sm text-center animate-pulse">
+          Building quiz questions from your sources…
+        </p>
+      ) : (
+        <LessonQuizStep
+          mcqs={activeQuizMcqs}
+          conceptId={conceptId}
+          conceptName={concept.name}
+          onComplete={() => setQuizDone(true)}
+        />
+      );
+      break;
+    case 4:
+      stepContent = <LessonFlashcardsStep cards={flashcards} />;
+      break;
+    case 5:
+      stepContent = (
+        <LessonReflectionStep
+          value={reflectionText}
+          onChange={setReflectionText}
+          onSave={(t) => void saveReflection(t)}
+        />
+      );
+      break;
+    case 6:
+      stepContent = testLoading ? (
+        <p className="text-zinc-500 text-sm text-center animate-pulse">
+          Building unit test from your sources…
+        </p>
+      ) : activeTestContent ? (
+        <LessonUnitTestStep
+          content={activeTestContent}
+          onSubmitted={() => setUnitTestDone(true)}
+        />
+      ) : (
+        <p className="text-zinc-500 text-sm text-center">No unit test — hit Continue to finish.</p>
+      );
+      break;
+    default:
+      stepContent = null;
+  }
+
+  useEffect(() => {
+    if (lessonStep === 3 && !quizLoading && !activeQuizMcqs.length) setQuizDone(true);
+    if (lessonStep === 6 && !testLoading && !activeTestContent) setUnitTestDone(true);
+  }, [lessonStep, quizLoading, testLoading, activeQuizMcqs.length, activeTestContent]);
 
   return (
-    <div className="h-screen flex flex-col bg-[#f4f7fb] overflow-hidden" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
-      {/* Top bar — Study Fetch style breadcrumb */}
-      <header className="shrink-0 bg-white border-b border-gray-200 px-4 py-2.5 flex items-center gap-3 z-20">
-        <button
-          type="button"
-          onClick={() => setScreen("student-workspace")}
-          className="shrink-0 p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"
-          aria-label="Back to courses"
-        >
-          <ArrowLeft size={18} />
-        </button>
-        <div className="flex items-center gap-1.5 text-sm min-w-0 flex-1">
-          <span className="text-gray-500 truncate">{courseTitle}</span>
-          <ChevronRight size={14} className="text-gray-300 shrink-0" />
-          <span className="font-semibold text-gray-800 truncate">{pdfName || concept.name}</span>
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {(["interactive", "summary", "narrative"] as OwlwiseMode[]).map((m) => {
-            if (!availableOwlModes.includes(m)) return null;
-            return (
-              <button
-                key={m}
-                type="button"
-                onClick={() => switchMode(m)}
-                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
-                  owlMode === m ? "bg-gray-100" : "hover:bg-gray-50"
-                }`}
-                title={m}
-              >
-                {m === "interactive" && <IconInteractive active={owlMode === m} />}
-                {m === "summary" && <IconSummary active={owlMode === m} dark />}
-                {m === "narrative" && <IconNarrative active={owlMode === m} dark />}
-              </button>
-            );
-          })}
-        </div>
-        <span className="text-xs text-gray-400 shrink-0 hidden sm:inline">
-          Unit {conceptIndex + 1} / {concepts.length}
-        </span>
-      </header>
-
-      {/* Split screen */}
-      <div className="flex flex-1 min-h-0">
-        {pdfPanelVisible && (
-        <div className={`${lessonPanel === "pdf" ? "w-full" : "w-1/2"} min-w-0 flex flex-col border-r border-gray-300`}>
-          <ReferencePdfViewer
-            fileData={pdfData}
-            fileName={pdfName}
-            targetPage={referencePage}
-            onPageCount={setPdfPageCount}
-            loading={pdfLoading}
-            error={pdfError}
-            onCollapse={collapsePdf}
-          />
-        </div>
-        )}
-
-        {(lessonPanel === "split" || lessonPanel === "notes" || lessonPanel === "transcript") && (
-        <div className={`${lessonPanel === "notes" || lessonPanel === "transcript" ? "w-full" : "w-1/2"} min-w-0 flex flex-col bg-white`}>
-          {/* Unit toolbar */}
-          <div className="shrink-0 border-b border-gray-100 px-5 py-3 flex items-center justify-between bg-[#fafbfc] gap-3">
-            <div className="min-w-0">
-              <p className="text-[11px] font-semibold text-[#1a73e8] uppercase tracking-wide">
-                Unit {conceptIndex + 1} summary
-              </p>
-              <h1 className="text-lg font-bold text-gray-900 leading-tight">{concept.name}</h1>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {!pdfPanelVisible && pdfData && (
-                <button
-                  type="button"
-                  onClick={expandPdf}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold text-gray-600 hover:bg-gray-50"
-                  style={{ borderColor: "#e5e7eb" }}
-                  title="Show reference PDF"
-                >
-                  <PanelLeftOpen size={14} />
-                  Show PDF
-                </button>
-              )}
-              <div className="w-8 h-8 rounded-lg bg-[#34a853] flex items-center justify-center">
-                <Check size={16} className="text-white" strokeWidth={3} />
-              </div>
-            </div>
-          </div>
-
-          {/* Scrollable unit blocks */}
-          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-            <div
-              className="prose prose-sm max-w-none"
-              style={font ? { fontFamily: font } : undefined}
-            >
-              <h2 className="text-base font-bold text-gray-900 mb-2 m-0">{textContent.heading}</h2>
-              {modeLoading ? (
-                <p className="text-sm text-gray-400 animate-pulse">Rewriting for {owlMode} mode…</p>
-              ) : (
-                <div className="space-y-3">
-                  {textContent.body.map((para, i) => (
-                    <p key={i} className="text-[14px] text-gray-700 leading-relaxed m-0">
-                      {para.split("**").map((part, j) =>
-                        j % 2 === 1 ? <strong key={j}>{part}</strong> : part
-                      )}
-                    </p>
-                  ))}
-                </div>
-              )}
-              {textContent.citation && (
-                <p className="text-[11px] text-gray-400 mt-2 flex items-center gap-1">
-                  <BookOpen size={12} />
-                  {textContent.citation}
-                  {referencePage > 0 && pdfData && (
-                    <span className="text-[#1a73e8]">· p. {referencePage}</span>
-                  )}
-                </p>
-              )}
-            </div>
-
-            {textContent.excerpt && (
-              <blockquote className="text-[13px] text-gray-600 leading-relaxed italic border-l-2 border-[#1a73e8]/40 pl-3 bg-[#f0f6ff] rounded-r-lg py-2 pr-3">
-                {textContent.highlight && textContent.excerpt.includes(textContent.highlight)
-                  ? (() => {
-                      const [before, after] = textContent.excerpt!.split(textContent.highlight!);
-                      return (
-                        <>
-                          {before}
-                          <mark className="bg-yellow-200 not-italic rounded px-0.5">{textContent.highlight}</mark>
-                          {after}
-                        </>
-                      );
-                    })()
-                  : textContent.excerpt}
-              </blockquote>
-            )}
-
-            {grouped.map((item, i) => {
-              if ("blocks" in item && item.type === "MCQGroup") {
-                return (
-                  <div key={`mcq-${i}`} className="border border-gray-100 rounded-xl p-4 bg-[#fafbfc]">
-                    <AdaptiveMCQSession
-                      conceptId={conceptId}
-                      conceptName={concept.name}
-                      initialBlocks={item.blocks}
-                    />
-                  </div>
-                );
-              }
-              const block = item as ContentBlock;
-              if (block.type === "Animation") {
-                return <AnimationPanel key={block.id || i} block={block} />;
-              }
-              return <StudentContentBlock key={block.id || i} block={block} conceptId={conceptId} />;
-            })}
-          </div>
-
-          <div className="shrink-0 border-t border-gray-100 px-5 py-3 bg-white flex justify-end">
-            <button
-              type="button"
-              onClick={handleNext}
-              className="px-6 py-2.5 bg-[#1a73e8] hover:bg-[#1557b0] text-white text-sm font-semibold rounded-full shadow-sm active:scale-[0.98] transition-all flex items-center gap-1.5"
-            >
-              {nextConcept ? (
-                <>
-                  Next: {nextConcept.name}
-                  <ChevronRight size={16} />
-                </>
-              ) : (
-                "Finish course"
-              )}
-            </button>
-          </div>
-        </div>
-        )}
-      </div>
-
-      <FloatingLessonChat
-        open={chatOpen}
-        onOpenChange={setChatOpen}
-        messages={messages}
-        input={chatInput}
-        onInputChange={setChatInput}
-        onSend={() => void sendChat()}
-        busy={chatBusy}
-        conceptName={concept.name}
-      />
-
-      <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-white rounded-full shadow-lg border border-gray-200 px-2 py-1.5">
-        {([
-          ["notes", "Notes"],
-          ["transcript", "Transcript"],
-          ["pdf", "View PDF"],
-          ["split", "Split Screen"],
-        ] as const).map(([panel, label]) => (
-          <button
-            key={panel}
-            type="button"
-            onClick={() => setLessonPanel(panel)}
-            className={`px-4 py-1.5 text-xs font-medium rounded-full flex items-center gap-1 ${
-              lessonPanel === panel
-                ? "font-semibold text-[#1a73e8] bg-[#e8f0fe]"
-                : "text-gray-600 hover:bg-gray-50"
-            }`}
-          >
-            {panel === "split" && <Columns2 size={12} />}
-            {label}
-          </button>
-        ))}
-      </div>
-    </div>
+    <>
+      <LessonShell
+        concepts={conceptNav}
+        stepIndex={lessonStep}
+        totalSteps={LESSON_STEP_COUNT}
+        stepTag={stepTag}
+        theme={isLightStep ? "light" : "dark"}
+        footerHint={footerHint}
+        onContinue={handleContinue}
+        continueDisabled={continueDisabled}
+        onBack={handleBack}
+        backLabel={backLabel}
+        onChatOpen={() => setChatOpen(true)}
+        mainClassName={
+          lessonStep === 2
+            ? "flex-1 flex flex-col px-6 sm:px-10 py-6 min-h-0 overflow-y-auto"
+            : undefined
+        }
+      >
+        {stepContent}
+      </LessonShell>
+      {chat}
+      {showCompleteModal && (
+        <UnitCompleteModal
+          conceptName={concept.name}
+          nextConceptName={nextConcept?.name}
+          onContinue={finishUnit}
+        />
+      )}
+    </>
   );
 }

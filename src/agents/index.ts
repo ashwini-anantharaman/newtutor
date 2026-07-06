@@ -34,6 +34,9 @@ export const ConceptTutorAgent = {
   async generateMCQ(courseId: string, conceptName: string) {
     return AgentAPI.generateMCQ(courseId, conceptName);
   },
+  async generateLessonQuizSet(courseId: string, conceptName: string) {
+    return AgentAPI.generateLessonQuizSet(courseId, conceptName);
+  },
   async generateFlashcards(courseId: string, conceptName: string) {
     return AgentAPI.generateFlashcards(courseId, conceptName);
   },

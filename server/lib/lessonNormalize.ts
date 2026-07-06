@@ -36,7 +36,7 @@ function asStringArray(v: unknown, fallback: string[]): string[] {
     return [v.trim()];
   }
   if (!Array.isArray(v)) return fallback;
-  const items = v.map((x) => String(x).trim()).filter(Boolean);
+  const items = v.map((x) => sanitizeLessonText(String(x))).filter(Boolean);
   return items.length ? items : fallback;
 }
 
@@ -155,14 +155,74 @@ export function normalizeBlueprint(raw: unknown, moduleName: string): LessonBlue
   };
 }
 
+export interface StudySection {
+  concept: string;
+  text: string;
+  check: string;
+}
+
+export function sanitizeLessonText(s: string): string {
+  return s
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\r\n/g, "\n")
+    .trim();
+}
+
+export function isPlaceholderMcqOption(opt: string): boolean {
+  const t = opt.trim();
+  return /^option\s*[a-d]$/i.test(t) || t.length < 4;
+}
+
+export function isPlaceholderMcq(options: string[]): boolean {
+  if (options.length < 4) return true;
+  return options.filter((o) => isPlaceholderMcqOption(o)).length >= 3;
+}
+
 export function extractBodyFromRaw(raw: unknown): string[] {
   const r = asRecord(raw);
-  const candidates = [r.body, r.paragraphs, r.content, r.sections, r.text];
+  const candidates = [r.body, r.paragraphs, r.content, r.text];
   for (const c of candidates) {
     const arr = asStringArray(c, []);
     if (arr.length) return arr;
   }
   return [];
+}
+
+export function normalizeStudySections(
+  raw: unknown,
+  moduleName: string,
+  blueprint: LessonBlueprint
+): StudySection[] {
+  const r = asRecord(raw);
+  const list = Array.isArray(r.sections) ? r.sections : [];
+  const sections = list
+    .map((item) => {
+      const o = asRecord(item);
+      const concept = sanitizeLessonText(asString(o.concept, ""));
+      const text = sanitizeLessonText(asString(o.text, ""));
+      const check = sanitizeLessonText(asString(o.check, ""));
+      if (!concept || !text) return null;
+      return {
+        concept,
+        text,
+        check: check || `In your own words, what is the key idea behind ${concept}?`,
+      };
+    })
+    .filter((s): s is StudySection => s !== null);
+
+  if (sections.length) return sections;
+
+  const body = extractBodyFromRaw(raw);
+  const points = blueprint.text.keyPoints.length ? blueprint.text.keyPoints : [moduleName];
+  return points.slice(0, 5).map((point, i) => {
+    const para = sanitizeLessonText(body[i] ?? body[0] ?? `${point} is an important idea in ${moduleName}.`);
+    return {
+      concept: point,
+      text: para,
+      check: `What would you tell a friend about ${point}?`,
+    };
+  });
 }
 
 export function normalizeTextBlock(
@@ -177,18 +237,23 @@ export function normalizeTextBlock(
     return `${prefix}${point}`;
   });
   const fallbackBody = blueprintBody.length >= 2
-    ? blueprintBody
+    ? blueprintBody.map(sanitizeLessonText)
     : [
         `${moduleName} is a core idea in this module.`,
         `Here's what matters: ${blueprint.text.keyPoints.join(" ")}`,
         `Remember the key term **${blueprint.text.sourceHighlight}** when you review.`,
-      ];
+      ].map(sanitizeLessonText);
+  const sections = normalizeStudySections(raw, moduleName, blueprint);
+  const bodyFromSections = sections.map((s) => s.text);
   return {
-    heading: asString(r.heading, blueprint.text.heading),
-    body: body.length ? body : fallbackBody,
-    sourceExcerpt: asString(
-      r.sourceExcerpt,
-      `"${blueprint.text.sourceHighlight}" — excerpt from course materials on ${moduleName}.`
+    heading: sanitizeLessonText(asString(r.heading, blueprint.text.heading)),
+    body: body.length ? body.map(sanitizeLessonText) : bodyFromSections.length ? bodyFromSections : fallbackBody,
+    sections,
+    sourceExcerpt: sanitizeLessonText(
+      asString(
+        r.sourceExcerpt,
+        `"${blueprint.text.sourceHighlight}" — excerpt from course materials on ${moduleName}.`
+      )
     ),
     citation: asString(r.citation, "Course materials"),
     sourceHighlight: asString(r.sourceHighlight, blueprint.text.sourceHighlight),
@@ -198,13 +263,14 @@ export function normalizeTextBlock(
 
 export function normalizeMcqBlock(raw: unknown, moduleName: string) {
   const r = asRecord(raw);
-  const options = asStringArray(r.options, [
-    "Option A",
-    "Option B",
-    "Option C",
-    "Option D",
-  ]).slice(0, 4);
-  while (options.length < 4) options.push(`Option ${String.fromCharCode(65 + options.length)}`);
+  const rawOptions = asStringArray(r.options, []).map(sanitizeLessonText).filter(Boolean);
+  let options = rawOptions.slice(0, 4);
+  if (isPlaceholderMcq(options)) {
+    options = [];
+  }
+  while (options.length < 4) {
+    options.push("");
+  }
 
   let correct = typeof r.correct === "number" ? r.correct : 0;
   if (correct < 0 || correct >= options.length) correct = 0;
@@ -215,28 +281,33 @@ export function normalizeMcqBlock(raw: unknown, moduleName: string) {
       const item = asRecord(h);
       return {
         level: asString(item.level, ["Nudge", "Concept", "Direction", "Explanation"][i] ?? "Hint"),
-        text: asString(item.text, "Think about the definition."),
+        text: sanitizeLessonText(asString(item.text, "Think about the definition.")),
       };
     });
   } else if (r.hints && typeof r.hints === "object") {
     hints = Object.entries(r.hints as Record<string, string>).map(([level, text]) => ({
       level,
-      text: String(text),
+      text: sanitizeLessonText(String(text)),
     }));
   }
   while (hints.length < 4) {
     hints.push({
       level: ["Nudge", "Concept", "Direction", "Explanation"][hints.length] ?? "Hint",
-      text: "Re-read the lesson text and look for the key term.",
+      text: "Re-read the lesson text and look for the key term in your sources.",
     });
   }
 
   return {
-    question: asString(r.question, `Which statement best describes ${moduleName}?`),
+    question: sanitizeLessonText(asString(r.question, `Which statement best describes ${moduleName}?`)),
     options,
     correct,
     hints: hints.slice(0, 4),
+    explanation: sanitizeLessonText(asString(r.explanation, "")),
   };
+}
+
+export function isValidMcqBlock(mcq: ReturnType<typeof normalizeMcqBlock>): boolean {
+  return Boolean(mcq.question && !isPlaceholderMcq(mcq.options));
 }
 
 export function normalizeMcqBlocks(raw: unknown, moduleName: string) {
