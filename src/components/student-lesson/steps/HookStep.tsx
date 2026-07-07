@@ -1,4 +1,5 @@
 import { Brain } from "lucide-react";
+import { StudyRichText } from "../StudyRichText";
 
 export function HookStep({ headline, subtext }: { headline: string; subtext: string }) {
   return (
@@ -15,10 +16,12 @@ export function HookStep({ headline, subtext }: { headline: string; subtext: str
         className="text-[28px] sm:text-[34px] leading-[1.2] font-bold text-white mb-5"
         style={{ fontFamily: "'Playfair Display', 'PT Serif', Georgia, serif" }}
       >
-        {headline}
+        <StudyRichText text={headline} />
       </h1>
 
-      <p className="text-[17px] sm:text-[19px] text-zinc-400 leading-relaxed">{subtext}</p>
+      <p className="text-[17px] sm:text-[19px] text-zinc-400 leading-relaxed">
+        <StudyRichText text={subtext} />
+      </p>
     </div>
   );
 }

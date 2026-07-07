@@ -164,6 +164,12 @@ export const StudentAssistantAgent = {
   },
 };
 
+export const StudyFormatAgent = {
+  async format(rawContent: string) {
+    return AgentAPI.formatStudyContent(rawContent);
+  },
+};
+
 export const AnimationAgent = {
   generate: AgentAPI.generateAnimation,
   generate3D: AgentAPI.generateScene3D,
@@ -176,5 +182,6 @@ export const Agents = {
   reflection: ReflectionAgent,
   planner: PlannerAgent,
   studentAssistant: StudentAssistantAgent,
+  studyFormat: StudyFormatAgent,
   animation: AnimationAgent,
 };

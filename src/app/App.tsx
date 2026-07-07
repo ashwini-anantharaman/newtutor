@@ -22,6 +22,8 @@ import { InstructorCreateScreen } from "../screens/InstructorCreateScreen";
 import { InstructorChallengeScreen } from "../screens/InstructorChallengeScreen";
 import { InstructorSettingsScreen } from "../screens/InstructorSettingsScreen";
 import { TeacherDashboardScreen } from "../screens/TeacherDashboardScreen";
+import { PreviewWorkspaceScreen } from "../screens/preview/PreviewWorkspaceScreen";
+import { PreviewConceptScreen } from "../screens/preview/PreviewConceptScreen";
 
 const STUDENT_SHELL_SCREENS: Screen[] = [
   "student-courses",
@@ -46,6 +48,7 @@ const INSTRUCTOR_SHELL_SCREENS: Screen[] = [
 ];
 
 const FULLSCREEN_STUDENT: Screen[] = ["student-concept"];
+const FULLSCREEN_INSTRUCTOR_PREVIEW: Screen[] = ["instructor-preview-concept"];
 
 export default function App() {
   const {
@@ -82,7 +85,7 @@ export default function App() {
   };
 
   const handleInstructorViewSwitch = () => {
-    if (screen === "instructor-preview") {
+    if (screen === "instructor-preview" || screen === "instructor-preview-concept") {
       setScreen(courseId ? "instructor-course" : "instructor-home");
       return;
     }
@@ -113,6 +116,10 @@ export default function App() {
     if (screen === "student-concept") return <StudentConceptScreen />;
   }
 
+  if (role === "instructor" && FULLSCREEN_INSTRUCTOR_PREVIEW.includes(screen)) {
+    if (screen === "instructor-preview-concept") return <PreviewConceptScreen />;
+  }
+
   const studentBreadcrumbs = () => {
     if (screen === "student-workspace") {
       return [
@@ -128,6 +135,7 @@ export default function App() {
       screen === "instructor-course" ||
       screen === "instructor-create" ||
       screen === "instructor-preview" ||
+      screen === "instructor-preview-concept" ||
       screen === "instructor-challenge"
     ) {
       return [
@@ -160,7 +168,7 @@ export default function App() {
     <>
       {screen === "instructor-home" && <InstructorClassroomsScreen />}
       {screen === "instructor-course" && <InstructorCourseModulesScreen />}
-      {screen === "instructor-preview" && <StudentWorkspaceScreen />}
+      {screen === "instructor-preview" && <PreviewWorkspaceScreen />}
       {screen === "instructor-create" && <InstructorCreateScreen />}
       {screen === "instructor-dashboard" && <TeacherDashboardScreen />}
       {screen === "instructor-challenge" && <InstructorChallengeScreen />}
@@ -201,7 +209,7 @@ export default function App() {
         breadcrumbs={instructorBreadcrumbs()}
         fullWidth={screen === "instructor-create"}
         onSwitchView={handleInstructorViewSwitch}
-        studentPreviewActive={screen === "instructor-preview"}
+        studentPreviewActive={screen === "instructor-preview" || screen === "instructor-preview-concept"}
         toast={toast}
         onDocuments={handleDocuments}
         onUpgrade={handleUpgrade}

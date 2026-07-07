@@ -53,7 +53,12 @@ function activeStudentNav(screen: Screen): StudentNavId | null {
 }
 
 function activeInstructorNav(screen: Screen): string | null {
-  if (screen === "instructor-home" || screen === "instructor-course" || screen === "instructor-preview") {
+  if (
+    screen === "instructor-home" ||
+    screen === "instructor-course" ||
+    screen === "instructor-preview" ||
+    screen === "instructor-preview-concept"
+  ) {
     return "classrooms";
   }
   if (screen === "instructor-challenge") return "invite-students";
@@ -70,6 +75,7 @@ export function StudyFetchSidebar({
   userName,
   courseTitle,
   onSwitchView,
+  studentPreviewActive,
 }: {
   role: "student" | "instructor";
   screen: Screen;
@@ -78,6 +84,7 @@ export function StudyFetchSidebar({
   userName: string;
   courseTitle?: string;
   onSwitchView?: () => void;
+  studentPreviewActive?: boolean;
 }) {
   const { setStudentToolsTab, openStudentAssistant, showToast, openCourseEditor, courseId } = useApp();
   const [collapsed, setCollapsed] = useState(false);
@@ -180,14 +187,14 @@ export function StudyFetchSidebar({
             onClick={onSwitchView}
             className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold border min-w-0"
             style={{
-              backgroundColor: screen === "instructor-preview" ? sf.blue : sf.blueLight,
-              borderColor: screen === "instructor-preview" ? sf.blue : "#BFDBFE",
-              color: screen === "instructor-preview" ? "#fff" : sf.blue,
+              backgroundColor: studentPreviewActive ? sf.blue : sf.blueLight,
+              borderColor: studentPreviewActive ? sf.blue : "#BFDBFE",
+              color: studentPreviewActive ? "#fff" : sf.blue,
             }}
           >
             <Users size={16} className="shrink-0" />
             <span className="truncate">
-              {screen === "instructor-preview" ? "Exit student preview" : "Switch to student view"}
+              {studentPreviewActive ? "Exit student preview" : "Switch to student view"}
             </span>
           </button>
         </div>
@@ -198,12 +205,12 @@ export function StudyFetchSidebar({
           <button
             type="button"
             onClick={onSwitchView}
-            title={screen === "instructor-preview" ? "Exit student preview" : "Student preview"}
+            title={studentPreviewActive ? "Exit student preview" : "Student preview"}
             className="w-full flex items-center justify-center p-2.5 rounded-xl border"
             style={{
-              backgroundColor: screen === "instructor-preview" ? sf.blue : sf.blueLight,
-              borderColor: screen === "instructor-preview" ? sf.blue : "#BFDBFE",
-              color: screen === "instructor-preview" ? "#fff" : sf.blue,
+              backgroundColor: studentPreviewActive ? sf.blue : sf.blueLight,
+              borderColor: studentPreviewActive ? sf.blue : "#BFDBFE",
+              color: studentPreviewActive ? "#fff" : sf.blue,
             }}
           >
             <Users size={16} />
@@ -327,6 +334,7 @@ export function StudyFetchShell({
         userName={userName}
         courseTitle={courseTitle}
         onSwitchView={onSwitchView}
+        studentPreviewActive={studentPreviewActive}
       />
       <div className="flex-1 flex flex-col min-w-0 min-h-0 relative z-0">
         <StudyFetchTopBar

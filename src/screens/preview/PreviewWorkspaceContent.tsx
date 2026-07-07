@@ -2,11 +2,12 @@ import { useMemo } from "react";
 import {
   FileText, HelpCircle, Layers, Video, BookOpen, CheckCircle2, MessageCircle,
 } from "lucide-react";
-import type { ContentBlock } from "../types";
-import { useApp } from "../store/AppContext";
-import { blocksForConcept } from "../lib/content-blocks";
-import { sf } from "../constants/studyFetchTheme";
-import { OwlAnim } from "../components/owlwise/primitives";
+import type { ContentBlock } from "../../types";
+import { useApp } from "../../store/AppContext";
+import { blocksForConcept } from "../../lib/content-blocks";
+import { sf } from "../../constants/studyFetchTheme";
+import { OwlAnim } from "../../components/owlwise/primitives";
+import { PREVIEW_LESSON_NAV } from "./lessonNavigation";
 
 const BLOCK_ICONS: Record<string, { icon: typeof FileText; color: string; label: string }> = {
   Text: { icon: FileText, color: "#EF4444", label: "Document" },
@@ -25,7 +26,8 @@ function resourceRows(blocks: ContentBlock[]) {
   });
 }
 
-export function StudentWorkspaceScreen() {
+/** Instructor preview workspace — mirrors student workspace, uses preview lesson routes. */
+export function PreviewWorkspaceContent() {
   const {
     courseTitle,
     concepts,
@@ -46,24 +48,12 @@ export function StudentWorkspaceScreen() {
   );
 
   const pdfSources = ragSources.filter((s) => s.type === "PDF" && s.status === "ready");
-  const rows = [
-    ...pdfSources.map((s) => ({
-      id: s.id,
-      title: s.name,
-      icon: FileText,
-      color: "#EF4444",
-      label: "PDF",
-    })),
-    ...resourceRows(conceptBlocks),
-  ];
-
-  const chapterLabel = modules[0]?.chapter || "General";
 
   const startLearning = (conceptId?: string) => {
     const id = conceptId ?? concept?.id;
     if (id) setActiveConceptId(id);
     setLessonPanel("split");
-    setScreen("student-concept");
+    setScreen(PREVIEW_LESSON_NAV.conceptScreen);
   };
 
   const openResource = (conceptId: string, label: string) => {
@@ -72,23 +62,25 @@ export function StudentWorkspaceScreen() {
     else if (label === "Document" || label === "Text") setLessonPanel("notes");
     else if (label === "Video") setLessonPanel("transcript");
     else setLessonPanel("split");
-    setScreen("student-concept");
+    setScreen(PREVIEW_LESSON_NAV.conceptScreen);
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <>
       <div
-        className="rounded-2xl px-5 py-3 flex items-center justify-between text-sm"
+        className="rounded-2xl px-5 py-3 flex items-center justify-between text-sm mb-6"
         style={{ backgroundColor: sf.blueBanner, color: sf.blue }}
       >
-        <span>Student workspace — <strong>{courseTitle}</strong></span>
+        <span>
+          Preview workspace — <strong>{courseTitle}</strong>
+        </span>
       </div>
 
-      <div className="bg-white rounded-2xl border p-5 flex items-center gap-4" style={{ borderColor: sf.border }}>
+      <div className="bg-white rounded-2xl border p-5 flex items-center gap-4 mb-6" style={{ borderColor: sf.border }}>
         <OwlAnim className="w-14 h-14 object-contain shrink-0" />
         <div className="flex-1 min-w-0">
           <p className="font-bold text-gray-900">Owlwise Assistant</p>
-          <p className="text-sm text-gray-500">Ask questions based on your course modules and sources.</p>
+          <p className="text-sm text-gray-500">Students can ask questions about course modules and sources.</p>
         </div>
         <button
           type="button"
@@ -108,7 +100,7 @@ export function StudentWorkspaceScreen() {
 
         {concepts.length === 0 ? (
           <div className="bg-white rounded-2xl border p-10 text-center text-gray-500" style={{ borderColor: sf.border }}>
-            No modules published yet. Check back after your instructor publishes the course.
+            Add modules to this course to preview the student experience.
           </div>
         ) : (
           <div className="space-y-4">
@@ -149,8 +141,8 @@ export function StudentWorkspaceScreen() {
                             onClick={() => openResource(c.id, row.label)}
                             className="w-full px-5 py-3 flex items-center gap-3 hover:bg-gray-50 text-left"
                           >
-                          <row.icon size={20} style={{ color: row.color }} />
-                          <span className="flex-1 text-sm font-medium text-gray-800 truncate">{row.title}</span>
+                            <row.icon size={20} style={{ color: row.color }} />
+                            <span className="flex-1 text-sm font-medium text-gray-800 truncate">{row.title}</span>
                             <span className="text-xs text-gray-400 shrink-0">{row.label}</span>
                           </button>
                         </li>
@@ -167,7 +159,7 @@ export function StudentWorkspaceScreen() {
       </div>
 
       {concepts.length > 1 && (
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap mt-4">
           {concepts.map((c) => (
             <button
               key={c.id}
@@ -183,6 +175,6 @@ export function StudentWorkspaceScreen() {
           ))}
         </div>
       )}
-    </div>
+    </>
   );
 }

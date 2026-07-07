@@ -19,15 +19,33 @@ export function videoEmbedSrc(url: string, startSeconds?: number, endSeconds?: n
   return youtubeEmbedSrc(url, startSeconds, endSeconds);
 }
 
-export function blocksForConcept(modules: CourseModule[], conceptId: string, conceptName: string): ContentBlock[] {
-  const matched = modules.filter(
-    (m) => m.conceptId === conceptId || m.name === conceptName
-  );
-  if (matched.length) {
-    return matched.flatMap((m) => m.blocks);
+export function moduleForConcept(
+  modules: CourseModule[],
+  conceptId: string,
+  conceptName: string,
+  conceptIndex?: number
+): CourseModule | undefined {
+  if (conceptId) {
+    const byId = modules.find((m) => m.conceptId === conceptId);
+    if (byId) return byId;
   }
-  const byName = modules.find((m) => m.name.toLowerCase() === conceptName.toLowerCase());
-  return byName?.blocks ?? [];
+  const byName = modules.find(
+    (m) => m.name === conceptName || m.name.toLowerCase() === conceptName.toLowerCase()
+  );
+  if (byName) return byName;
+  if (conceptIndex != null && conceptIndex >= 0 && conceptIndex < modules.length) {
+    return modules[conceptIndex];
+  }
+  return undefined;
+}
+
+export function blocksForConcept(
+  modules: CourseModule[],
+  conceptId: string,
+  conceptName: string,
+  conceptIndex?: number
+): ContentBlock[] {
+  return moduleForConcept(modules, conceptId, conceptName, conceptIndex)?.blocks ?? [];
 }
 
 export function AISidebar({ conceptId, conceptName, contentMode, onQuiz }: {

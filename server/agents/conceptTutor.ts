@@ -176,19 +176,26 @@ export async function generateModeContent(
   mode: string,
   subtitle?: string
 ) {
-  const chunks = await retrieveContextForLesson(courseId, conceptName, { subtitle: `${mode} ${subtitle ?? ""}`, count: 8 });
+  const chunks = await retrieveContextForLesson(courseId, conceptName, { subtitle: `${mode} ${subtitle ?? ""}`, count: 10 });
   const context = formatRetrievedContext(chunks);
+  const modeVoice =
+    mode === "real-world"
+      ? "Use vivid real-world analogies."
+      : mode === "conversational"
+        ? "Use friendly conversational tone."
+        : "Use clear textbook tone.";
   const raw = await claudeJSON<unknown>(
-    `You are the Owlwise Concept Tutor. Write explanation content for mode "${mode}" (real-world=analogies, conversational=friendly, textbook=formal).
-Return JSON: { "heading": string, "body": string[], "sourceExcerpt": string, "citation": string }`,
-    `Concept: ${conceptName}\nSubtitle: ${subtitle ?? ""}\n\nRetrieved:\n${context}`,
-    3000
+    `You are the Owlwise Concept Tutor. Rewrite study content for mode "${mode}". ${modeVoice}
+${STUDY_SECTIONS_RULES}`,
+    `Concept module: ${conceptName}\nSubtitle: ${subtitle ?? ""}\n\nRetrieved sources:\n${context}`,
+    6000
   );
   const blueprint = normalizeBlueprint({ text: { heading: conceptName, keyPoints: [conceptName] } }, conceptName);
   const normalized = normalizeTextBlock(raw, blueprint, conceptName);
   return {
     heading: normalized.heading,
     body: normalized.body,
+    sections: normalized.sections,
     sourceExcerpt: normalized.sourceExcerpt,
     citation: normalized.citation,
   };
@@ -312,6 +319,8 @@ function hasBlueprintContent(raw: unknown): boolean {
 }
 
 function hasTextContent(raw: unknown): boolean {
+  const r = asRecord(raw);
+  if (Array.isArray(r.sections) && r.sections.length > 0) return true;
   return extractBodyFromRaw(raw).length > 0;
 }
 
@@ -319,6 +328,23 @@ const MCQ_SOURCE_RULES = `
 CRITICAL — every option must be a full answer phrase grounded in the instructor sources below.
 NEVER use "Option A/B/C/D", letter labels, or empty placeholders.
 Write plausible distractors from common misconceptions in the material.`;
+
+const STUDY_SECTIONS_RULES = `
+Return JSON: {
+  "heading": string,
+  "sections": [{ "concept": string, "text": string }],
+  "sourceExcerpt": string,
+  "citation": string
+}
+Section rules — write like a newspaper feature article with clear subheadings:
+- Create 5–8 sections that together cover the FULL module. Extract as much relevant detail from the sources as a student needs to truly understand the topic. Do not summarize lightly — be thorough and information-dense.
+- Each "concept" is a specific, punchy subheading (3–8 words) — like a newspaper section header, not a full sentence.
+- Each "text" is 2–4 paragraphs separated by blank lines (use \\n\\n between paragraphs in the string). Aim for 150–250 words per section. Use conversational language and real-world examples where possible.
+- Bold key terms with **double asterisks**.
+- ONE concept per section — do not split a concept across sections or combine unrelated concepts.
+- Each "text" must be a single plain string — never a JSON array string.
+- Do NOT include inline citations, source references, parenthetical attributions, or quotation marks around sourced material. Weave information naturally as if you already know it.
+- Do NOT include recall questions or quick checks.`;
 
 function isGenericPlaceholderBody(body: string[], moduleName: string): boolean {
   return body.length === 3 && body[0]?.startsWith(`${moduleName} is a core idea`);
@@ -378,7 +404,7 @@ async function generateTextBlock(
   blueprint: ModuleLessonBlueprint
 ) {
   const system = `Write the TEXT block for this module lesson grounded in the instructor sources.
-Return JSON: { "heading": string, "body": string[] (3-5 paragraphs), "sourceExcerpt": string, "citation": string }`;
+${STUDY_SECTIONS_RULES}`;
   const trimmedContext = context.length > 12_000 ? `${context.slice(0, 12_000)}\n\n[truncated]` : context;
   const user = `Module: ${moduleName}
 Lesson plan: ${JSON.stringify(blueprint)}
@@ -387,14 +413,14 @@ Sources:
 ${trimmedContext}`;
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    const raw = await claudeJSON<unknown>(system, user, 3500);
+    const raw = await claudeJSON<unknown>(system, user, 5500);
     if (hasTextContent(raw)) return normalizeTextBlock(raw, blueprint, moduleName);
     console.warn(`[lesson] Text attempt ${attempt + 1} returned empty body for "${moduleName}"`);
   }
   const raw = await claudeJSON<unknown>(
     `${system}\n\nCRITICAL: body MUST be a non-empty string array with at least 3 paragraphs grounded in the sources.`,
     user,
-    3500
+    5500
   );
   const normalized = normalizeTextBlock(raw, blueprint, moduleName);
   if (!hasTextContent(raw)) {
@@ -675,6 +701,7 @@ export async function generateModuleLesson(
       content: {
         heading: text.heading,
         body: text.body,
+        sections: text.sections,
         sourceExcerpt: text.sourceExcerpt,
         citation: text.citation,
         sourceHighlight: text.sourceHighlight ?? blueprint.text.sourceHighlight,
@@ -690,7 +717,7 @@ export async function generateModuleLesson(
       content: animationContent,
     },
     ...(videoBlock ? [videoBlock] : []),
-    ...mcqs.map((mcq, i) => ({
+    ...mcqs.filter(isValidMcqBlock).map((mcq, i) => ({
       type: "MCQ" as const,
       label: mcqs.length > 1 ? `MCQ ${i + 1}` : "MCQ question",
       title: mcq.question.length > 72 ? `${mcq.question.slice(0, 72)}…` : mcq.question,

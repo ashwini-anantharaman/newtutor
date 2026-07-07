@@ -18,6 +18,7 @@ export type Screen =
   | "instructor-home"
   | "instructor-course"
   | "instructor-preview"
+  | "instructor-preview-concept"
   | "instructor-create"
   | "instructor-dashboard"
   | "instructor-challenge"

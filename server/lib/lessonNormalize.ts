@@ -30,14 +30,18 @@ function asString(v: unknown, fallback: string): string {
 }
 
 function asStringArray(v: unknown, fallback: string[]): string[] {
+  if (Array.isArray(v)) {
+    const items = v.map((x) => coerceStudyText(x)).filter(Boolean);
+    return items.length ? items : fallback;
+  }
   if (typeof v === "string" && v.trim()) {
-    const parts = v.split(/\n\n+/).map((s) => s.trim()).filter(Boolean);
-    if (parts.length) return parts;
+    const coerced = coerceStudyText(v);
+    const parts = coerced.split(/\n\n+/).map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 1) return parts;
+    if (coerced) return [coerced];
     return [v.trim()];
   }
-  if (!Array.isArray(v)) return fallback;
-  const items = v.map((x) => sanitizeLessonText(String(x))).filter(Boolean);
-  return items.length ? items : fallback;
+  return fallback;
 }
 
 function kebabToCamel(key: string): string {
@@ -155,12 +159,68 @@ export function normalizeBlueprint(raw: unknown, moduleName: string): LessonBlue
   };
 }
 
+export interface StudySection {
+  concept: string;
+  text: string;
+  check?: string;
+}
+
 export function sanitizeLessonText(s: string): string {
   return s
     .replace(/\\n/g, "\n")
     .replace(/\\t/g, "\t")
+    .replace(/\\\*/g, "*")
     .replace(/\r\n/g, "\n")
     .trim();
+}
+
+export function coerceStudyText(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .map((x) => coerceStudyText(x))
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  if (typeof value !== "string") {
+    return sanitizeLessonText(String(value ?? ""));
+  }
+  return stripJsonArrayArtifacts(value);
+}
+
+function stripJsonArrayArtifacts(s: string): string {
+  let t = s.trim();
+  if (!t.startsWith("[")) {
+    if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+      return sanitizeLessonText(t.slice(1, -1));
+    }
+    return sanitizeLessonText(t);
+  }
+
+  if (t.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(t) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((x) => sanitizeLessonText(String(x)))
+          .filter(Boolean)
+          .join("\n\n");
+      }
+    } catch {
+      /* try manual extraction below */
+    }
+  }
+
+  const inner = t.replace(/^\[\s*/, "").replace(/\s*\]$/, "");
+  const quoted = [...inner.matchAll(/"((?:\\.|[^"\\])*)"/g)].map((m) =>
+    sanitizeLessonText(m[1].replace(/\\"/g, '"'))
+  );
+  if (quoted.length) {
+    return quoted.filter(Boolean).join("\n\n");
+  }
+
+  let single = inner.replace(/^["']/, "").replace(/["']$/, "");
+  single = single.replace(/["']\s*\]?\s*$/, "");
+  return sanitizeLessonText(single);
 }
 
 export function isPlaceholderMcqOption(opt: string): boolean {
@@ -182,6 +242,33 @@ export function extractBodyFromRaw(raw: unknown): string[] {
   return [];
 }
 
+export function normalizeStudySections(
+  raw: unknown,
+  moduleName: string,
+  blueprint: LessonBlueprint
+): StudySection[] {
+  const r = asRecord(raw);
+  const list = Array.isArray(r.sections) ? r.sections : [];
+  const sections = list
+    .map((item) => {
+      const o = asRecord(item);
+      const concept = coerceStudyText(o.concept);
+      const text = coerceStudyText(o.text);
+      if (!concept || !text) return null;
+      return { concept, text };
+    })
+    .filter((s): s is StudySection => s !== null);
+
+  if (sections.length) return sections;
+
+  const body = extractBodyFromRaw(raw);
+  const points = blueprint.text.keyPoints.length ? blueprint.text.keyPoints : [moduleName];
+  return points.slice(0, 8).map((point, i) => {
+    const para = sanitizeLessonText(body[i] ?? body[0] ?? `${point} is an important idea in ${moduleName}.`);
+    return { concept: point, text: para };
+  });
+}
+
 export function normalizeTextBlock(
   raw: unknown,
   blueprint: LessonBlueprint,
@@ -200,9 +287,12 @@ export function normalizeTextBlock(
         `Here's what matters: ${blueprint.text.keyPoints.join(" ")}`,
         `Remember the key term **${blueprint.text.sourceHighlight}** when you review.`,
       ].map(sanitizeLessonText);
+  const sections = normalizeStudySections(raw, moduleName, blueprint);
+  const bodyFromSections = sections.map((s) => s.text);
   return {
     heading: sanitizeLessonText(asString(r.heading, blueprint.text.heading)),
-    body: body.length ? body.map(sanitizeLessonText) : fallbackBody,
+    body: body.length ? body.map(sanitizeLessonText) : bodyFromSections.length ? bodyFromSections : fallbackBody,
+    sections,
     sourceExcerpt: sanitizeLessonText(
       asString(
         r.sourceExcerpt,

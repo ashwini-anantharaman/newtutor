@@ -27,22 +27,22 @@ export function LessonUnitTestStep({
   };
 
   if (!q) {
-    return <p className="text-zinc-500 text-sm">No unit test for this lesson yet.</p>;
+    return null;
   }
 
   return (
     <div className="w-full max-w-xl mx-auto text-center">
       <div className="flex items-center justify-center gap-1.5 mb-2">
-        <Lock size={14} className="text-[#a0522d]" />
-        <p className="text-[11px] font-medium tracking-[0.22em] uppercase text-[#a0522d]">Unit test</p>
+        <Lock size={14} className="text-zinc-400" />
+        <p className="text-[11px] font-medium tracking-[0.22em] uppercase text-zinc-500">Unit test</p>
       </div>
       <p className="text-[11px] tracking-[0.15em] uppercase text-zinc-500 mb-3">
         Question {qIndex + 1} of {total}
       </p>
-      <div className="w-8 h-1 bg-[#a0522d] rounded-full mx-auto mb-6" />
+      <div className="w-8 h-1 bg-zinc-600 rounded-full mx-auto mb-6" />
 
       <h2
-        className="text-[22px] sm:text-[28px] font-bold text-[#1a1a1a] mb-8 leading-snug"
+        className="text-[22px] sm:text-[28px] font-bold text-white mb-8 leading-snug"
         style={{ fontFamily: "'Playfair Display', 'PT Serif', Georgia, serif" }}
       >
         {q.question}
@@ -66,8 +66,8 @@ export function LessonUnitTestStep({
                   : isWrong
                     ? "bg-red-600 text-white"
                     : selected
-                      ? "bg-[#1a1a1a] text-white"
-                      : "bg-[#1a1a1a] text-white hover:bg-black"
+                      ? "bg-zinc-200 text-black"
+                      : "bg-zinc-900 border border-zinc-800 text-zinc-200 hover:border-zinc-600"
               }`}
             >
               {opt}
@@ -82,7 +82,7 @@ export function LessonUnitTestStep({
             <button
               type="button"
               onClick={() => setQIndex((i) => i - 1)}
-              className="px-5 py-2 rounded-full border border-zinc-300 text-sm text-zinc-600"
+              className="px-5 py-2 rounded-full border border-zinc-700 text-sm text-zinc-400 hover:text-white"
             >
               Back
             </button>
@@ -92,7 +92,7 @@ export function LessonUnitTestStep({
               type="button"
               onClick={() => setQIndex((i) => i + 1)}
               disabled={answers[qIndex] === undefined}
-              className="px-6 py-2 rounded-full bg-[#1a1a1a] text-white text-sm font-semibold disabled:opacity-40"
+              className="px-6 py-2 rounded-full bg-zinc-200 text-black text-sm font-semibold disabled:opacity-40"
             >
               Next question
             </button>
@@ -101,7 +101,7 @@ export function LessonUnitTestStep({
               type="button"
               onClick={submitTest}
               disabled={!allAnswered}
-              className="px-6 py-2 rounded-full bg-[#1a1a1a] text-white text-sm font-semibold disabled:opacity-40"
+              className="px-6 py-2 rounded-full bg-zinc-200 text-black text-sm font-semibold disabled:opacity-40"
             >
               Submit test
             </button>
@@ -110,7 +110,7 @@ export function LessonUnitTestStep({
       )}
 
       {submitted && (
-        <p className="text-sm text-zinc-600">
+        <p className="text-sm text-zinc-400">
           Score submitted — hit Continue to finish the unit.
         </p>
       )}

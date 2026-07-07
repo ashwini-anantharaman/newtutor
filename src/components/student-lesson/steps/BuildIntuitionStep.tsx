@@ -1,6 +1,7 @@
 import { Sparkles } from "lucide-react";
 import type { ContentBlock } from "../../../types";
 import { AnimationPanel } from "../../AnimationPanel";
+import { StudyRichText } from "../StudyRichText";
 
 function SynapseFallback() {
   return (
@@ -55,7 +56,9 @@ export function BuildIntuitionStep({
         {title}
       </h2>
 
-      <p className="text-[15px] sm:text-[17px] text-zinc-400 leading-relaxed mb-8 max-w-lg mx-auto">{body}</p>
+      <p className="text-[15px] sm:text-[17px] text-zinc-400 leading-relaxed mb-8 max-w-lg mx-auto">
+        <StudyRichText text={body} />
+      </p>
 
       <div className="text-left [&_.rounded-2xl]:rounded-3xl [&_.border-gray-200]:border-zinc-800">
         {animationBlock ? <AnimationPanel block={animationBlock} /> : <SynapseFallback />}

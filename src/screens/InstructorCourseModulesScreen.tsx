@@ -135,7 +135,13 @@ export function InstructorCourseModulesScreen() {
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => setScreen("instructor-preview")}
+            onClick={() => {
+              if (!courseId) {
+                showToast("Open a classroom first to preview the student view.");
+                return;
+              }
+              setScreen("instructor-preview");
+            }}
             className="flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-semibold text-gray-700 hover:bg-gray-50"
             style={{ borderColor: sf.border, color: sf.blue }}
           >

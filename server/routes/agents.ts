@@ -13,7 +13,7 @@ import * as interactiveAnimation from "../agents/interactiveAnimation.js";
 import * as animationManim from "../agents/animationManim.js";
 import { isGenerativeManimConfigured } from "../lib/config.js";
 import { formatErrorMessage } from "../lib/errors.js";
-import { embedTexts } from "../lib/voyage.js";
+import * as studyFormatter from "../agents/studyFormatter.js";
 
 const router = Router();
 
@@ -51,6 +51,20 @@ router.post("/concept/content", requireAuth, async (req: AuthedRequest, res) => 
     const { courseId, conceptName, mode, subtitle } = req.body;
     const result = await conceptTutor.generateModeContent(courseId, conceptName, mode, subtitle);
     res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+router.post("/study/format", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const { rawContent } = req.body;
+    if (typeof rawContent !== "string" || !rawContent.trim()) {
+      res.status(400).json({ error: "rawContent is required" });
+      return;
+    }
+    const blocks = await studyFormatter.formatStudyContent(rawContent);
+    res.json({ blocks });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }

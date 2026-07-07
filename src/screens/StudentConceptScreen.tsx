@@ -20,16 +20,30 @@ import { LessonReflectionStep } from "../components/student-lesson/steps/LessonR
 import { LessonUnitTestStep } from "../components/student-lesson/steps/LessonUnitTestStep";
 import { UnitCompleteModal } from "../components/student-lesson/UnitCompleteModal";
 import {
-  LESSON_STEP_TAGS,
   getLessonBlocks,
   mcqFromBlock,
   flashcardsFromBlock,
   testFromBlock,
 } from "../components/student-lesson/lessonBlocks";
+import {
+  buildLessonStepPlan,
+  LESSON_STEP_LABELS,
+  type LessonStepId,
+} from "../components/student-lesson/lessonSteps";
+import {
+  extractRawStudyTextFromBlocks,
+  finalizeStudyBlocks,
+  finalizeStudyBlocksFromRaw,
+  type FormattedStudyBlock,
+} from "../lib/study-format";
+import { coerceStudyText } from "../lib/study-sections";
+import { STUDENT_LESSON_NAV, type LessonNavigation } from "./preview/lessonNavigation";
 
-const LESSON_STEP_COUNT = 7;
+type StudentConceptScreenProps = {
+  lessonNav?: LessonNavigation;
+};
 
-export function StudentConceptScreen() {
+export function StudentConceptScreen({ lessonNav = STUDENT_LESSON_NAV }: StudentConceptScreenProps) {
   const {
     activeConceptId,
     setActiveConceptId,
@@ -66,10 +80,14 @@ export function StudentConceptScreen() {
     citation?: string;
   } | null>(null);
   const [modeLoading, setModeLoading] = useState(false);
+  const [studyBlocks, setStudyBlocks] = useState<FormattedStudyBlock[]>([]);
+  const [studyFormatLoading, setStudyFormatLoading] = useState(false);
+
+  const conceptIndex = concepts.findIndex((c) => c.id === conceptId);
 
   const conceptBlocks = useMemo(
-    () => (concept ? blocksForConcept(modules, conceptId, concept.name) : []),
-    [modules, conceptId, concept]
+    () => (concept ? blocksForConcept(modules, conceptId, concept.name, conceptIndex) : []),
+    [modules, conceptId, concept, conceptIndex]
   );
 
   const textBlocks = conceptBlocks.filter((b) => b.type === "Text");
@@ -97,6 +115,7 @@ export function StudentConceptScreen() {
   }, [courseId, conceptId, contentMode, concept?.name, concept?.subtitle, hasTextBlock, modeSwitched]);
 
   const [lessonStep, setLessonStep] = useState(0);
+  const [studyDone, setStudyDone] = useState(false);
   const [quizDone, setQuizDone] = useState(false);
   const [unitTestDone, setUnitTestDone] = useState(false);
   const [reflectionText, setReflectionText] = useState("");
@@ -113,13 +132,79 @@ export function StudentConceptScreen() {
     setChatOpen(false);
     setLessonStep(0);
     setQuizDone(false);
+    setStudyDone(false);
     setUnitTestDone(false);
     setReflectionText("");
     setShowCompleteModal(false);
+    setStudyBlocks([]);
   }, [conceptId]);
 
-  const conceptIndex = concepts.findIndex((c) => c.id === conceptId);
+  const rawStudyText = useMemo(() => {
+    if (textBlocks.length) {
+      return extractRawStudyTextFromBlocks(textBlocks);
+    }
+    return coerceStudyText(concept?.subtitle ?? "");
+  }, [textBlocks, concept?.subtitle]);
+
+  /** Every generated module has a Text block — always show Study when one exists. */
+  const hasStudyContent = textBlocks.length > 0 || rawStudyText.trim().length > 0;
+  const stepPlan = useMemo(
+    () =>
+      buildLessonStepPlan({
+        hasStudyContent,
+        quizCount: seedMcqs.length,
+        flashcardCount: flashcards.length,
+        hasUnitTest: testContent !== null,
+      }),
+    [hasStudyContent, seedMcqs.length, flashcards.length, testContent]
+  );
+  const currentStepId: LessonStepId = stepPlan[lessonStep] ?? stepPlan[0] ?? "hook";
+
+  useEffect(() => {
+    if (lessonStep >= stepPlan.length) {
+      setLessonStep(Math.max(0, stepPlan.length - 1));
+    }
+  }, [lessonStep, stepPlan.length]);
+
+  useEffect(() => {
+    if (!rawStudyText.trim()) {
+      setStudyBlocks([]);
+      setStudyFormatLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setStudyBlocks([]);
+    setStudyDone(false);
+    setStudyFormatLoading(true);
+    Agents.studyFormat
+      .format(rawStudyText)
+      .then((res) => {
+        if (cancelled) return;
+        const formatted = finalizeStudyBlocks(res.blocks ?? []);
+        setStudyBlocks(formatted.length ? formatted : finalizeStudyBlocksFromRaw(rawStudyText));
+      })
+      .catch(() => {
+        if (!cancelled) setStudyBlocks(finalizeStudyBlocksFromRaw(rawStudyText));
+      })
+      .finally(() => {
+        if (!cancelled) setStudyFormatLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conceptId, rawStudyText]);
+
   const nextConcept = concepts[conceptIndex + 1];
+
+  const studyHeading = useMemo(() => {
+    for (const block of textBlocks) {
+      const c = block.content as Record<string, unknown>;
+      const heading = typeof c.heading === "string" ? c.heading.trim() : "";
+      if (heading) return coerceStudyText(heading);
+      if (typeof block.title === "string" && block.title.trim()) return coerceStudyText(block.title.trim());
+    }
+    return concept?.name ?? "Lesson";
+  }, [textBlocks, concept?.name]);
 
   const textContent = useMemo(() => {
     if (modeContent && (modeSwitched || !hasTextBlock)) {
@@ -130,8 +215,9 @@ export function StudentConceptScreen() {
     }
     if (hasTextBlock && textBlocks[0]) {
       const c = textBlocks[0].content as Record<string, unknown>;
-      const rawBody = Array.isArray(c.body) ? (c.body as string[]) : [String(c.body ?? "")].filter(Boolean);
-      const body = rawBody.map((p) => p.replace(/\\n/g, "\n").replace(/\\t/g, "\t").trim());
+      const body = Array.isArray(c.body)
+        ? (c.body as unknown[]).map((p) => coerceStudyText(p))
+        : [coerceStudyText(c.body ?? "")].filter(Boolean);
       return {
         heading: (c.heading as string) ?? concept?.name ?? "Lesson",
         body,
@@ -190,26 +276,26 @@ export function StudentConceptScreen() {
     if (nextConcept) {
       setActiveConceptId(nextConcept.id);
     } else {
-      setScreen("student-workspace");
+      setScreen(lessonNav.workspaceScreen);
     }
   };
 
   const handleContinue = () => {
-    if (lessonStep === 5 && reflectionText.trim()) {
+    if (currentStepId === "reflection" && reflectionText.trim()) {
       void saveReflection(reflectionText);
     }
-    if (lessonStep === 6 && unitTestDone) {
+    const isLast = lessonStep >= stepPlan.length - 1;
+    if (isLast) {
+      if (currentStepId === "unit-test" && !unitTestDone) return;
       setShowCompleteModal(true);
       return;
     }
-    if (lessonStep < LESSON_STEP_COUNT - 1) {
-      setLessonStep((s) => s + 1);
-    }
+    setLessonStep((s) => s + 1);
   };
 
   const handleBack = () => {
     if (lessonStep === 0) {
-      setScreen("student-workspace");
+      setScreen(lessonNav.workspaceScreen);
       return;
     }
     setLessonStep((s) => s - 1);
@@ -224,7 +310,7 @@ export function StudentConceptScreen() {
           <p className="text-sm text-zinc-400 mb-4">This course has no lessons yet.</p>
           <button
             type="button"
-            onClick={() => setScreen("student-workspace")}
+            onClick={() => setScreen(lessonNav.workspaceScreen)}
             className="px-6 py-3 bg-zinc-200 text-black rounded-full text-sm font-semibold"
           >
             Back to courses
@@ -250,42 +336,40 @@ export function StudentConceptScreen() {
   );
 
   const hookContent = useMemo(() => {
-    const rawBody = hasTextBlock
-      ? (() => {
-          const c = textBlocks[0].content as Record<string, unknown>;
-          return Array.isArray(c.body) ? (c.body as string[]) : [String(c.body ?? "")].filter(Boolean);
-        })()
+    const hookBody = studyBlocks[0]?.text
+      ? [studyBlocks[0].text]
       : textContent.body;
-    const rawHeading = hasTextBlock
-      ? String((textBlocks[0].content as Record<string, unknown>).heading ?? concept?.name ?? "")
-      : textContent.heading;
     return deriveHookContent({
       conceptName: concept?.name ?? "this topic",
       subtitle: concept?.subtitle,
-      heading: rawHeading,
-      body: rawBody,
+      heading: studyHeading,
+      body: hookBody,
     });
-  }, [hasTextBlock, textBlocks, textContent, concept]);
+  }, [studyBlocks, textContent.body, studyHeading, concept]);
 
   const animationContent = lessonBlocks.animation?.content as Record<string, unknown> | undefined;
   const buildTitle =
     (typeof animationContent?.description === "string" && animationContent.description) ||
     `Watch how ${concept.name.toLowerCase()} works`;
   const buildBody =
-    textContent.body[0]?.slice(0, 200) ||
+    studyBlocks[0]?.text ||
+    coerceStudyText(textContent.body[0] ?? "") ||
     concept.subtitle ||
     "See the core idea in action before we dive deeper.";
 
-  const stepTag = LESSON_STEP_TAGS[lessonStep] ?? "Lesson";
-  const isLightStep = lessonStep === 6;
+  const stepTag = LESSON_STEP_LABELS[currentStepId] ?? "Lesson";
   const footerHint =
-    lessonStep === 3 && !quizDone
-      ? "Finish the quiz to continue"
-      : lessonStep === 6 && !unitTestDone
-        ? "Complete the unit test to continue"
-        : "Ready when you are";
+    currentStepId === "study" && studyBlocks.length > 0 && !studyDone
+      ? "Work through each study section to continue"
+      : currentStepId === "quiz" && !quizDone
+        ? "Finish the quiz to continue"
+        : currentStepId === "unit-test" && !unitTestDone
+          ? "Complete the unit test to continue"
+          : "Ready when you are";
   const continueDisabled =
-    (lessonStep === 3 && !quizDone) || (lessonStep === 6 && !unitTestDone);
+    (currentStepId === "study" && studyBlocks.length > 0 && !studyDone) ||
+    (currentStepId === "quiz" && !quizDone) ||
+    (currentStepId === "unit-test" && !unitTestDone);
 
   const chat = (
     <FloatingLessonChat
@@ -301,11 +385,11 @@ export function StudentConceptScreen() {
   );
 
   let stepContent: ReactNode;
-  switch (lessonStep) {
-    case 0:
+  switch (currentStepId) {
+    case "hook":
       stepContent = <HookStep headline={hookContent.headline} subtext={hookContent.subtext} />;
       break;
-    case 1:
+    case "build":
       stepContent = (
         <BuildIntuitionStep
           title={buildTitle}
@@ -314,20 +398,21 @@ export function StudentConceptScreen() {
         />
       );
       break;
-    case 2:
+    case "study":
       stepContent = (
         <StudyStep
           conceptName={concept.name}
-          heading={textContent.heading}
-          body={textContent.body}
-          loading={modeLoading}
+          heading={studyHeading}
+          blocks={studyBlocks}
+          loading={studyFormatLoading}
           mode={owlMode}
           availableModes={availableOwlModes}
           onModeChange={switchMode}
+          onAllSectionsComplete={() => setStudyDone(true)}
         />
       );
       break;
-    case 3:
+    case "quiz":
       stepContent = (
         <LessonQuizStep
           mcqs={seedMcqs}
@@ -337,10 +422,10 @@ export function StudentConceptScreen() {
         />
       );
       break;
-    case 4:
+    case "flashcards":
       stepContent = <LessonFlashcardsStep cards={flashcards} />;
       break;
-    case 5:
+    case "reflection":
       stepContent = (
         <LessonReflectionStep
           value={reflectionText}
@@ -349,14 +434,12 @@ export function StudentConceptScreen() {
         />
       );
       break;
-    case 6:
-      stepContent = testContent ? (
+    case "unit-test":
+      stepContent = (
         <LessonUnitTestStep
-          content={testContent}
+          content={testContent!}
           onSubmitted={() => setUnitTestDone(true)}
         />
-      ) : (
-        <p className="text-zinc-500 text-sm text-center">No unit test — hit Continue to finish.</p>
       );
       break;
     default:
@@ -364,18 +447,23 @@ export function StudentConceptScreen() {
   }
 
   useEffect(() => {
-    if (lessonStep === 3 && seedMcqs.length === 0) setQuizDone(true);
-    if (lessonStep === 6 && !testContent) setUnitTestDone(true);
-  }, [lessonStep, seedMcqs.length, testContent]);
+    if (
+      currentStepId === "study" &&
+      !studyBlocks.length &&
+      !studyFormatLoading &&
+      !hasStudyContent
+    ) {
+      setStudyDone(true);
+    }
+  }, [currentStepId, studyBlocks.length, studyFormatLoading, hasStudyContent]);
 
   return (
     <>
       <LessonShell
         concepts={conceptNav}
         stepIndex={lessonStep}
-        totalSteps={LESSON_STEP_COUNT}
+        totalSteps={stepPlan.length}
         stepTag={stepTag}
-        theme={isLightStep ? "light" : "dark"}
         footerHint={footerHint}
         onContinue={handleContinue}
         continueDisabled={continueDisabled}
@@ -383,7 +471,7 @@ export function StudentConceptScreen() {
         backLabel={backLabel}
         onChatOpen={() => setChatOpen(true)}
         mainClassName={
-          lessonStep === 2
+          currentStepId === "study"
             ? "flex-1 flex flex-col px-6 sm:px-10 py-6 min-h-0 overflow-y-auto"
             : undefined
         }

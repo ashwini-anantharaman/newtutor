@@ -140,6 +140,11 @@ export const AgentAPI = {
       method: "POST",
       body: JSON.stringify({ courseId, conceptName, mode, subtitle }),
     }),
+  formatStudyContent: (rawContent: string) =>
+    api<{ blocks: { title: string; text: string }[] }>("/agents/study/format", {
+      method: "POST",
+      body: JSON.stringify({ rawContent }),
+    }),
   generateMCQ: (courseId: string, conceptName: string) =>
     api<{ question: string; options: string[]; correct: number; hints: { level: string; text: string }[] }>(
       "/agents/quiz/generate",
