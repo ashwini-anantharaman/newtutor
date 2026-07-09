@@ -19,6 +19,7 @@
   --disp: "Fraunces", Georgia, serif;
   --ui: "Inter", system-ui, sans-serif;
   --mono: "IBM Plex Mono", monospace;
+  flex: 1;
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -98,13 +99,18 @@
 .student-course-root .sc-workarea {
   flex: 1;
   min-width: 0;
-  height: 100vh;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   position: relative;
 }
 
 .student-course-root .sc-gview {
   display: none;
-  height: 100vh;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -114,8 +120,11 @@
 
 .student-course-root .sc-app {
   display: flex;
+  flex: 1;
+  min-height: 0;
   height: 100%;
   width: 100%;
+  overflow: hidden;
 }
 
 .student-course-root .sc-rail {
@@ -188,6 +197,8 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .student-course-root .sc-top {
@@ -293,7 +304,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 44px 30px 120px;
+  padding: 44px 30px 32px;
 }
 
 .student-course-root .sc-wrap {
@@ -304,6 +315,7 @@
 
 .student-course-root .sc-bottom {
   flex: none;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -311,6 +323,7 @@
   padding: 14px 30px;
   border-top: 1px solid var(--line);
   background: var(--bg2);
+  z-index: 2;
 }
 
 .student-course-root .sc-hint {
@@ -435,7 +448,8 @@
 }
 
 .student-course-root .sc-loading {
-  height: 100vh;
+  height: 100%;
+  min-height: 240px;
   display: grid;
   place-items: center;
   color: var(--soft);

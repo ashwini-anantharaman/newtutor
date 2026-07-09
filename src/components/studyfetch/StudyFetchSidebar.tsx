@@ -359,7 +359,7 @@ export function StudyFetchShell({
           studentPreviewActive={studentPreviewActive}
         />
         <div className="flex-1 flex min-h-0 overflow-hidden">
-          <main className={`flex-1 min-h-0 overflow-y-auto ${fullWidth ? "" : "p-6"}`}>{children}</main>
+          <main className={`flex-1 min-h-0 flex flex-col ${fullWidth ? "overflow-hidden" : "overflow-y-auto p-6"}`}>{children}</main>
           {role === "student" && <StudentCoachPanel />}
           {rightRail && (
             <aside className="w-[300px] shrink-0 border-l overflow-y-auto p-4 space-y-4" style={{ borderColor: sf.border, backgroundColor: sf.bg }}>
