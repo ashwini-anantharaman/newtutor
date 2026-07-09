@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ContentPolicy, StudioCourseData } from "../../learning/types";
 import { isSkeletonStudio } from "../../learning/load-studio";
-import { friendlyGenerationError } from "../../../shared/studio/skeleton";
+import { friendlyGenerationError, isPlaceholderStudio } from "../../../shared/studio/skeleton";
 import type { RAGSource } from "../../types";
 import { AgentAPI, DataAPI } from "../../lib/api";
 import { useApp } from "../../store/AppContext";
@@ -102,7 +102,7 @@ export function StudioOnboarding({
           if (status.status === "done") {
             const studio =
               status.studio ?? (await DataAPI.getStudio(courseId).catch(() => null));
-            if (studio?.pages?.length && !isSkeletonStudio(studio)) {
+            if (studio?.pages?.length && !isSkeletonStudio(studio) && !isPlaceholderStudio(studio)) {
               onComplete(studio);
               return;
             }
@@ -114,9 +114,12 @@ export function StudioOnboarding({
             return;
           }
           const saved = await DataAPI.getStudio(courseId).catch(() => null);
-          if (saved?.pages?.length && !isSkeletonStudio(saved)) {
-            onComplete(saved);
-            return;
+          if (saved?.pages?.length && !isSkeletonStudio(saved) && !isPlaceholderStudio(saved)) {
+            const job = await AgentAPI.studioGenerateStatus(courseId);
+            if (job.status === "done") {
+              onComplete(saved);
+              return;
+            }
           }
         } catch {
           /* keep polling */
@@ -220,7 +223,7 @@ export function StudioOnboarding({
             (await DataAPI.getStudio(courseId).catch(() => null));
           stop();
           setGenPhase(3);
-          if (!studio?.pages?.length || isSkeletonStudio(studio)) {
+          if (!studio?.pages?.length || isSkeletonStudio(studio) || isPlaceholderStudio(studio)) {
             const msg = friendlyGenerationError(
               "Generation finished but returned placeholder content only — check API credits and sources."
             );
@@ -240,16 +243,6 @@ export function StudioOnboarding({
           showToast(msg);
           setGenWaiting(false);
           return;
-        }
-
-        if (status.status === "idle") {
-          const saved = await DataAPI.getStudio(courseId).catch(() => null);
-          if (saved?.pages?.length && !isSkeletonStudio(saved)) {
-            stop();
-            setGenPhase(3);
-            onComplete(saved);
-            return;
-          }
         }
 
         await new Promise((r) => setTimeout(r, 2000));

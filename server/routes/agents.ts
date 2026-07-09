@@ -17,7 +17,7 @@ import { isGenerativeManimConfigured } from "../lib/config.js";
 import { formatErrorMessage } from "../lib/errors.js";
 import * as studyFormatter from "../agents/studyFormatter.js";
 import * as studioGenerator from "../agents/studioGenerator.js";
-import { isSkeletonStudio } from "../../shared/studio/skeleton.js";
+import { isPlaceholderStudio, isSkeletonStudio } from "../../shared/studio/skeleton.js";
 import { supabaseAdmin } from "../lib/supabase.js";
 
 const router = Router();
@@ -479,21 +479,27 @@ router.get("/studio/generate-status/:courseId", requireAuth, async (req: AuthedR
       res.status(403).json({ error: "Forbidden" });
       return;
     }
-    const job = studioGenerator.getStudioGenerateJob(courseId);
+    const job = await studioGenerator.getStudioGenerateJob(courseId);
     if (!job) {
-      const saved = await studioGenerator.loadStudioCourse(courseId);
-      if (saved?.pages?.length) {
-        res.json({ status: "done", studio: saved, progress: "Course ready" });
-        return;
-      }
       res.json({ status: "idle" });
       return;
     }
-    if (job.status === "done" && job.studio && isSkeletonStudio(job.studio)) {
+    if (job.status === "done") {
+      const saved = await studioGenerator.loadStudioCourse(courseId);
+      if (saved && (isSkeletonStudio(saved) || isPlaceholderStudio(saved))) {
+        res.json({
+          status: "error",
+          error: "Generation produced placeholder content only — retry after fixing API credits or sources.",
+          progress: job.progress,
+        });
+        return;
+      }
       res.json({
-        status: "error",
-        error: "Generation produced placeholder content only — retry after fixing API credits or sources.",
-        progress: job.progress,
+        status: "done",
+        studio: saved ?? undefined,
+        progress: job.progress ?? "Course ready",
+        moduleIndex: job.moduleIndex,
+        moduleTotal: job.moduleTotal,
       });
       return;
     }
@@ -502,7 +508,6 @@ router.get("/studio/generate-status/:courseId", requireAuth, async (req: AuthedR
       progress: job.progress,
       moduleIndex: job.moduleIndex,
       moduleTotal: job.moduleTotal,
-      studio: job.status === "done" ? job.studio : undefined,
       error: job.error,
     });
   } catch (e) {

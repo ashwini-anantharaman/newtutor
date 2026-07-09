@@ -6,6 +6,7 @@ import { supabaseAdmin } from "../lib/supabase.js";
 import { extractFromBuffer, extractFromUrl, isDriveUrl, isQuizletUrl } from "../lib/extract.js";
 import { extractYouTubeId, isYouTubeUrl } from "../lib/youtube.js";
 import { getCourseRagStats, ingestExtract } from "../lib/rag.js";
+import { storePdfFigures } from "../lib/pdfFigures.js";
 import { formatErrorMessage } from "../lib/errors.js";
 
 /** Max source upload size (PDFs, docs, audio). Brain Facts high-res ~66MB. */
@@ -250,6 +251,25 @@ router.post("/course/:courseId/sources/upload", requireAuth, upload.single("file
       try {
         const extract = await extractFromBuffer(file.buffer, file.originalname);
         await ingestExtract(courseId, source.id, extract, file.originalname);
+        if (type === "PDF" && file.buffer.length > 0) {
+          try {
+            const figs = await storePdfFigures(courseId, source.id, file.buffer);
+            if (figs.length) {
+              const { data: row } = await supabaseAdmin
+                .from("sources")
+                .select("detail")
+                .eq("id", source.id)
+                .single();
+              const base = row?.detail?.replace(/\s*·\s*\d+ figures? extracted\.?$/i, "") ?? "";
+              await supabaseAdmin
+                .from("sources")
+                .update({ detail: `${base} · ${figs.length} figures extracted`.trim() })
+                .eq("id", source.id);
+            }
+          } catch (figErr) {
+            console.warn(`[rag] PDF figure extraction failed for ${file.originalname}:`, figErr);
+          }
+        }
       } catch (e) {
         const message = formatErrorMessage(e);
         console.error(`[rag] File ingest failed for ${file.originalname}:`, message);

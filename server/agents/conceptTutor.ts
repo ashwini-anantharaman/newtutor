@@ -10,7 +10,8 @@ import {
   isValidMcqBlock,
   type LessonBlueprint,
 } from "../lib/lessonNormalize.js";
-import { formatRetrievedContext, getCourseRagStats, mergeChunksById, retrieveChunks, retrieveContextForDraft, retrieveContextForLesson, type RagChunk } from "../lib/rag.js";
+import { formatRetrievedContext, getCourseRagStats, mergeChunksById, retrieveChunks, retrieveContextForDraft, retrieveContextForLesson, retrieveFrontMatterChunks, type RagChunk } from "../lib/rag.js";
+import { buildDraftFromChapterTitles, extractChapterTitlesFromToc } from "../lib/tocExtract.js";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { difficultyForMastery } from "../lib/mastery.js";
 import { isGenerativeManimConfigured } from "../lib/config.js";
@@ -148,24 +149,44 @@ export async function draftCourseStructure(
     );
   }
 
-  const [structureChunks, tocChunks, headingChunks] = await Promise.all([
-    retrieveContextForDraft(courseId, prompt, 16),
-    retrieveChunks(courseId, "table of contents chapter list section headings parts units", 14),
-    retrieveChunks(courseId, "chapter title part unit section introduction overview", 10),
+  const [structureChunks, tocChunks, headingChunks, frontMatter] = await Promise.all([
+    retrieveContextForDraft(courseId, prompt, 20),
+    retrieveChunks(courseId, "table of contents chapter list section headings parts units", 18),
+    retrieveChunks(courseId, "chapter title part unit section introduction overview", 14),
+    retrieveFrontMatterChunks(courseId, 35, 20),
   ]);
-  const chunks = mergeChunksById([structureChunks, tocChunks, headingChunks], 28);
-  let context = formatRetrievedContext(chunks);
-  if (context.length > 18_000) {
-    context = `${context.slice(0, 18_000)}\n\n[... additional source text omitted — derive structure from the excerpts above]`;
+  const tocText = [...frontMatter, ...tocChunks, ...headingChunks].map((c) => c.content).join("\n");
+  const tocChapterTitles = extractChapterTitlesFromToc(tocText);
+  if (tocChapterTitles.length >= 8) {
+    console.info(
+      `[draft] Using ${tocChapterTitles.length} TOC chapters (not part-level grouping) for course ${courseId.slice(0, 8)}…`
+    );
+    const chunks = mergeChunksById([frontMatter, structureChunks, tocChunks, headingChunks], 12);
+    const titleHint = formatRetrievedContext(chunks).match(/Brain Facts|A Primer on the Brain/i)?.[0];
+    return buildDraftFromChapterTitles(
+      tocChapterTitles,
+      titleHint ? "Brain Facts" : "Course from uploaded sources"
+    );
   }
+
+  const chunks = mergeChunksById([frontMatter, structureChunks, tocChunks, headingChunks], 40);
+  let context = formatRetrievedContext(chunks);
+  if (context.length > 28_000) {
+    context = `${context.slice(0, 28_000)}\n\n[... additional source text omitted — derive structure from the excerpts above]`;
+  }
+  const chapterHint =
+    tocChapterTitles.length >= 3
+      ? `\n\nDetected chapter titles in sources: ${tocChapterTitles.map((t, i) => `${i + 1}. ${t}`).join("; ")}. Create exactly one module per numbered chapter — do NOT group chapters into fewer "Part" modules.`
+      : "";
   const raw = await claudeJSON<unknown>(
     `You are the LAIC AI Course Drafter. Build a course structure entirely from the instructor's uploaded sources — any subject (essays, articles, textbooks, business, humanities, STEM, etc.).
 Module names and chapters must reflect what the sources actually contain. Do not invent an unrelated domain.
 
 TEXTBOOKS: If sources are a multi-chapter book (table of contents, numbered chapters, Brain Facts, textbook PDF, etc.):
-- Create one chapter group per book chapter (e.g. CH 1 … CH 18).
-- Create exactly one module per chapter, using the book's chapter title (shortened if needed, ≤ 8 words).
-- Do NOT collapse an 18-chapter book into 3–4 broad modules.
+- Create one chapter group per book chapter (e.g. CH 1 … CH 16).
+- Create exactly one module per numbered chapter, using the book's chapter title (shortened if needed, ≤ 8 words).
+- When the book has both "Part 1…6" sections AND numbered chapters, use ONE MODULE PER CHAPTER — never collapse chapters into part-level modules.
+- Do NOT collapse a 16-chapter book into 6 part-level modules.
 
 SHORTER MATERIALS: For articles, essays, or small uploads without a TOC, use 3–10 modules in 2–4 chapter groups.
 
@@ -176,7 +197,7 @@ Return JSON:
   "prerequisiteEdges": [{ "from": string, "to": string }],
   "message": string
 }`,
-    `Instructor goals: ${prompt || "(derive structure from sources alone)"}\n\nSources:\n${context}`,
+    `Instructor goals: ${prompt || "(derive structure from sources alone)"}${chapterHint}\n\nSources:\n${context}`,
     8192
   );
   return normalizeDraftCourse(raw);

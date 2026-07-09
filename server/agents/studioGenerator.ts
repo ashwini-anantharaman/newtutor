@@ -1,11 +1,14 @@
 import { claudeJSON, claudeText } from "../lib/anthropic.js";
-import { formatRetrievedContext, getCourseRagStats, retrieveContextForLesson, type RagChunk } from "../lib/rag.js";
+import { formatRetrievedContext, getCourseRagStats, retrieveContextForLesson, retrieveFrontMatterChunks, type RagChunk } from "../lib/rag.js";
+import { listCoursePdfFigures } from "../lib/pdfFigures.js";
+import { chapterPageRanges, extractChapterOutlineFromToc } from "../lib/tocExtract.js";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { extractYouTubeId } from "../lib/youtube.js";
 import { draftCourseStructure } from "./conceptTutor.js";
 import {
   DEFAULT_IMPORTANCE,
   moduleToPage,
+  placeFiguresOnPages,
   placeImagesOnPages,
 } from "../../shared/studio/build-pages.js";
 import type {
@@ -14,7 +17,12 @@ import type {
   StudioCourseData,
   StudioTool,
 } from "../../shared/studio/types.js";
-import { friendlyGenerationError, isSkeletonStudio } from "../../shared/studio/skeleton.js";
+import { friendlyGenerationError, isPlaceholderStudio, isSkeletonStudio } from "../../shared/studio/skeleton.js";
+import {
+  readStudioGenerationJob,
+  writeStudioGenerationJob,
+  type PersistedStudioGenerationJob,
+} from "../lib/studioGenerationJob.js";
 import {
   linkVocabInStudio,
   normalizeCardItem,
@@ -39,8 +47,31 @@ export type StudioGenerateJob = {
 
 const generateJobs = new Map<string, StudioGenerateJob>();
 
-export function getStudioGenerateJob(courseId: string): StudioGenerateJob | null {
-  return generateJobs.get(courseId) ?? null;
+async function persistJob(courseId: string, job: StudioGenerateJob) {
+  generateJobs.set(courseId, job);
+  await writeStudioGenerationJob(courseId, {
+    status: job.status,
+    progress: job.progress,
+    moduleIndex: job.moduleIndex,
+    moduleTotal: job.moduleTotal,
+    error: job.error,
+    startedAt: job.startedAt,
+  });
+}
+
+export async function getStudioGenerateJob(courseId: string): Promise<StudioGenerateJob | null> {
+  const mem = generateJobs.get(courseId);
+  if (mem) return mem;
+  const persisted = await readStudioGenerationJob(courseId);
+  if (!persisted || persisted.status === "idle") return null;
+  return {
+    status: persisted.status,
+    progress: persisted.progress,
+    moduleIndex: persisted.moduleIndex,
+    moduleTotal: persisted.moduleTotal,
+    error: persisted.error,
+    startedAt: persisted.startedAt ?? Date.now(),
+  };
 }
 
 export function startStudioGenerateJob(
@@ -48,21 +79,24 @@ export function startStudioGenerateJob(
   policy: ContentPolicy,
   prompt?: string
 ): StudioGenerateJob {
-  const existing = generateJobs.get(courseId);
-  if (existing?.status === "running") return existing;
+  const mem = generateJobs.get(courseId);
+  if (mem?.status === "running") return mem;
 
   const job: StudioGenerateJob = {
     status: "running",
     progress: "Analyzing sources and drafting structure…",
     startedAt: Date.now(),
   };
-  generateJobs.set(courseId, job);
+  void persistJob(courseId, job);
 
   void (async () => {
+    const existing = await getStudioGenerateJob(courseId);
+    if (existing?.status === "running" && existing.startedAt !== job.startedAt) return;
+
     try {
       const studio = await generateStudioCourse(courseId, policy, prompt, {
-        onProgress: (message, moduleIndex, moduleTotal) => {
-          generateJobs.set(courseId, {
+        onProgress: async (message, moduleIndex, moduleTotal) => {
+          await persistJob(courseId, {
             status: "running",
             progress: message,
             moduleIndex,
@@ -71,14 +105,19 @@ export function startStudioGenerateJob(
           });
         },
       });
-      generateJobs.set(courseId, {
+      if (isPlaceholderStudio(studio)) {
+        throw new Error(
+          "Generation produced placeholder content only — confirm sources show Ready, API keys are set, and retry."
+        );
+      }
+      await persistJob(courseId, {
         status: "done",
         studio,
         progress: "Course ready",
         startedAt: job.startedAt,
       });
     } catch (err) {
-      generateJobs.set(courseId, {
+      await persistJob(courseId, {
         status: "error",
         error: friendlyGenerationError(formatErrorMessage(err)),
         startedAt: job.startedAt,
@@ -140,7 +179,7 @@ function normalizeModule(raw: unknown, moduleName: string): GeneratedStudioModul
       q: String(hook.q ?? `What makes "${moduleName}" worth understanding?`),
       sub: String(hook.sub ?? "Let's build intuition from your source material."),
     },
-    lessons: lessons.slice(0, 4).map((l: Record<string, unknown>, i) => {
+    lessons: lessons.slice(0, 8).map((l: Record<string, unknown>, i) => {
       const src = (l.src as Record<string, unknown>) ?? {};
       const check = (l.check as Record<string, unknown>) ?? {};
       const opts = Array.isArray(check.opts) ? check.opts.map(String).slice(0, 4) : ["A", "B", "C", "D"];
@@ -256,17 +295,35 @@ export async function generateStudioModule(
   courseId: string,
   moduleName: string,
   policy: ContentPolicy,
-  opts?: { chapter?: string; subtitle?: string }
+  opts?: { chapter?: string; subtitle?: string; pageStart?: number; pageEnd?: number; textbook?: boolean }
 ): Promise<GeneratedStudioModule> {
+  const textbook = opts?.textbook ?? (opts?.pageStart != null && opts?.pageEnd != null);
+  const chunkCount = textbook ? 32 : 14;
   const chunks = await retrieveContextForLesson(courseId, moduleName, {
     chapter: opts?.chapter,
     subtitle: opts?.subtitle,
-    count: 12,
+    count: chunkCount,
+    pageStart: opts?.pageStart,
+    pageEnd: opts?.pageEnd,
   });
-  const context = formatRetrievedContext(chunks);
+  let context = formatRetrievedContext(chunks);
+  if (context.length > 48_000) {
+    context = `${context.slice(0, 48_000)}\n\n[... additional source text omitted — cover all key ideas from the excerpts above]`;
+  }
 
-  const raw = await claudeJSON<unknown>(
-    `You are the Owlwise Studio course builder. Create ONE module in the Brain Bee block model from retrieved sources.
+  const pageHint =
+    opts?.pageStart != null && opts?.pageEnd != null
+      ? `\nThis module covers textbook pages ${opts.pageStart}–${opts.pageEnd}. Include details from across that range — do not summarize lightly.`
+      : "";
+
+  const lessonRules = textbook
+    ? `- TEXTBOOK CHAPTER: Create 5–8 study lessons that together cover the FULL chapter from the sources — definitions, mechanisms, examples, and connections. Do not skip major sections.
+- Each lesson html: 3–6 substantial <p> paragraphs (not one-liners). Use <b> for key terms. Be information-dense; students should not need the PDF for core facts.
+- Distribute inline checks across lessons (each lesson gets its own check).`
+    : `- 2–4 study lessons per module, each with its own inline check.
+- Each lesson html: 2–4 <p> paragraphs with <b> for key terms.`;
+
+  const systemPrompt = `You are the Owlwise Studio course builder. Create ONE module in the Brain Bee block model from retrieved sources.
 
 Content policy: ${policyLine(policy)}
 
@@ -275,9 +332,9 @@ Return JSON only:
   "hook": { "q": string (curious question), "sub": string (one-sentence scene-setter) },
   "lessons": [
     {
-      "kind": "Build intuition" | "Go deeper" | "Connect ideas",
+      "kind": "Build intuition" | "Go deeper" | "Connect ideas" | "Core concepts" | "Apply it",
       "title": string,
-      "html": string (2-4 short <p> paragraphs, use <b> for key terms),
+      "html": string (multiple <p> paragraphs, use <b> for key terms),
       "src": { "cite": string, "quote": string (verbatim excerpt), "page": number },
       "check": {
         "concept": string,
@@ -317,21 +374,37 @@ Return JSON only:
 }
 
 Rules:
-- 2-3 lessons per module, each with its own inline check.
+${lessonRules}
+- lessons MUST be a non-empty array with real content from the sources.
 - 0-2 case files only when the source supports a patient, experiment, or concrete example.
-- Animation: 3-5 steps with valid region keys.
-- Mastery quiz: 2-3 concepts, each with 2-3 questions in the pool for retry variety.
-- Vocab: 4-8 terms from the module. Cards: 4-6 flashcards.`,
-    `Module: ${moduleName}
-Chapter: ${opts?.chapter ?? "General"}
+- Animation: 3-6 steps with valid region keys.
+- Mastery quiz: 3-4 concepts for textbook chapters (2-3 for shorter modules), each with 2-3 questions in the pool.
+- Vocab: 8-14 terms for textbook chapters (4-8 otherwise). Cards: 6-10 flashcards for textbook chapters.`;
+
+  const userPrompt = `Module: ${moduleName}
+Chapter: ${opts?.chapter ?? "General"}${pageHint}
 
 Sources:
-${context || "(no chunks — use module title and general knowledge sparingly)"}`,
-    12000
-  );
+${context || "(no chunks — use module title and general knowledge sparingly)"}`;
 
-  const mod = enrichLessonsFromChunks(normalizeModule(raw, moduleName), chunks);
-  if (!mod.lessons.length) {
+  let mod: GeneratedStudioModule | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const raw = await claudeJSON<unknown>(systemPrompt, userPrompt, textbook ? 16000 : 12000);
+    const candidate = enrichLessonsFromChunks(normalizeModule(raw, moduleName), chunks);
+    if (candidate.lessons.length > 0) {
+      mod = candidate;
+      break;
+    }
+    console.warn(`[studio] Empty lessons for "${moduleName}" (attempt ${attempt + 1})`);
+  }
+
+  if (!mod) {
+    if (chunks.length) {
+      throw new Error(
+        `Could not generate lesson content for "${moduleName}" — verify ANTHROPIC_API_KEY and that sources are indexed.`
+      );
+    }
+    mod = enrichLessonsFromChunks(normalizeModule({}, moduleName), chunks);
     mod.lessons.push({
       kind: "Build intuition",
       title: moduleName,
@@ -401,7 +474,7 @@ export async function generateStudioCourse(
   }
 ): Promise<StudioCourseData> {
   const report = (message: string, moduleIndex?: number, moduleTotal?: number) => {
-    opts?.onProgress?.(message, moduleIndex, moduleTotal);
+    void Promise.resolve(opts?.onProgress?.(message, moduleIndex, moduleTotal));
   };
 
   report("Checking indexed sources…");
@@ -444,6 +517,20 @@ export async function generateStudioCourse(
     );
   }
 
+  const frontMatter = await retrieveFrontMatterChunks(courseId, 40, 24);
+  const tocOutline = extractChapterOutlineFromToc(frontMatter.map((c) => c.content).join("\n"));
+  const pageRanges = chapterPageRanges(tocOutline);
+  const textbook = tocOutline.length >= 8;
+  const pageRangeForModule = (name: string) => {
+    const range = pageRanges.find(
+      (r) =>
+        r.title.toLowerCase() === name.toLowerCase() ||
+        name.toLowerCase().includes(r.title.toLowerCase()) ||
+        r.title.toLowerCase().includes(name.toLowerCase())
+    );
+    return range ? { pageStart: range.start, pageEnd: range.end } : {};
+  };
+
   if (draft.title) {
     await supabaseAdmin.from("courses").update({ title: draft.title }).eq("id", courseId);
   }
@@ -483,7 +570,12 @@ export async function generateStudioCourse(
   for (let i = 0; i < modulesToBuild.length; i++) {
     const m = modulesToBuild[i];
     report(`Building module ${i + 1} of ${modulesToBuild.length}: ${m.name}`, i + 1, modulesToBuild.length);
-    const generated = await generateStudioModule(courseId, m.name, policy, { chapter: m.chapter });
+    const pageRange = pageRangeForModule(m.name);
+    const generated = await generateStudioModule(courseId, m.name, policy, {
+      chapter: m.chapter,
+      textbook,
+      ...pageRange,
+    });
     const importance = DEFAULT_IMPORTANCE[i] ?? "core";
     const page = moduleToPage(m.id, m.name, generated, importance);
     pages.push(page);
@@ -511,26 +603,35 @@ export async function generateStudioCourse(
     }
   }
 
-  report("Placing images into lessons…");
+  report("Extracting figures from PDF sources…");
+  const pdfFigures = await listCoursePdfFigures(courseId);
+
+  report("Placing figures and images into lessons…");
   const { data: imageSources } = await supabaseAdmin
     .from("sources")
-    .select("id, name, storage_path")
+    .select("id, name, storage_path, type")
     .eq("course_id", courseId)
-    .eq("type", "File");
+    .in("type", ["File", "Image"]);
 
   const images: { name: string; src: string }[] = [];
   for (const src of imageSources ?? []) {
     if (!src.storage_path) continue;
-    const { data } = await supabaseAdmin.storage.from("sources").createSignedUrl(src.storage_path, 3600);
+    const isImage =
+      src.type === "Image" ||
+      /\.(png|jpe?g|gif|webp|svg)$/i.test(src.name) ||
+      src.storage_path.includes("/studio-images/");
+    if (!isImage) continue;
+    const { data } = await supabaseAdmin.storage.from("sources").createSignedUrl(src.storage_path, 60 * 60 * 24 * 7);
     if (data?.signedUrl) images.push({ name: src.name, src: data.signedUrl });
   }
 
-  const pagesWithImages = placeImagesOnPages(pages, images);
+  let pagesWithMedia = placeFiguresOnPages(pages, pdfFigures, pageRanges);
+  pagesWithMedia = placeImagesOnPages(pagesWithMedia, images);
 
   const studio: StudioCourseData = linkVocabInStudio({
     policy,
-    pages: pagesWithImages,
-    tools: seedTools(pagesWithImages, allCards, allVocab),
+    pages: pagesWithMedia,
+    tools: seedTools(pagesWithMedia, allCards, allVocab),
     vocab: allVocab,
     cards: allCards,
   });

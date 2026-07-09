@@ -193,17 +193,80 @@ export function mergeChunksById(lists: RagChunk[][], max: number): RagChunk[] {
   return merged.slice(0, max);
 }
 
+/** First pages of PDF sources — usually contains the table of contents. */
+export async function retrieveFrontMatterChunks(
+  courseId: string,
+  maxPage = 35,
+  limit = 20
+): Promise<RagChunk[]> {
+  const { data, error } = await supabaseAdmin
+    .from("document_chunks")
+    .select("id, source_id, content, citation, page_start, page_end, time_start, time_end")
+    .eq("course_id", courseId)
+    .not("page_start", "is", null)
+    .lte("page_start", maxPage)
+    .order("page_start")
+    .limit(limit);
+
+  if (error) {
+    if (/page_start|page_end|does not exist/i.test(formatErrorMessage(error))) return [];
+    throw new Error(formatErrorMessage(error));
+  }
+
+  return (data ?? []).map((c) => ({ ...c, similarity: 1 }));
+}
+
+/** Text chunks whose pages fall within a textbook chapter range. */
+export async function retrieveChunksForPageRange(
+  courseId: string,
+  pageStart: number,
+  pageEnd: number,
+  limit = 32
+): Promise<RagChunk[]> {
+  const { data, error } = await supabaseAdmin
+    .from("document_chunks")
+    .select("id, source_id, content, citation, page_start, page_end, time_start, time_end")
+    .eq("course_id", courseId)
+    .not("page_start", "is", null)
+    .gte("page_start", pageStart)
+    .lte("page_start", pageEnd)
+    .order("page_start")
+    .limit(limit);
+
+  if (error) {
+    if (/page_start|page_end|does not exist/i.test(formatErrorMessage(error))) return [];
+    throw new Error(formatErrorMessage(error));
+  }
+
+  return (data ?? []).map((c) => ({ ...c, similarity: 1 }));
+}
+
 const SMALL_CORPUS_CHUNK_LIMIT = 15;
 
 /** Retrieve source context for a lesson — uses all material when the upload corpus is small. */
 export async function retrieveContextForLesson(
   courseId: string,
   moduleName: string,
-  opts?: { chapter?: string; subtitle?: string; count?: number }
+  opts?: { chapter?: string; subtitle?: string; count?: number; pageStart?: number; pageEnd?: number }
 ): Promise<RagChunk[]> {
   const count = opts?.count ?? 10;
   const stats = await getCourseRagStats(courseId);
   if (!stats.chunkCount) return [];
+
+  const pageRange =
+    opts?.pageStart != null && opts?.pageEnd != null && opts.pageEnd >= opts.pageStart
+      ? { start: opts.pageStart, end: opts.pageEnd }
+      : null;
+
+  if (pageRange) {
+    const byPage = await retrieveChunksForPageRange(courseId, pageRange.start, pageRange.end, count);
+    if (byPage.length >= Math.min(count, 8)) {
+      console.info(
+        `[rag] Using ${byPage.length} page-range chunk(s) for "${moduleName}" (pp. ${pageRange.start}–${pageRange.end})`
+      );
+      return byPage.slice(0, count);
+    }
+  }
 
   if (stats.chunkCount <= SMALL_CORPUS_CHUNK_LIMIT) {
     const all = await retrieveAllCourseChunks(courseId);
@@ -220,7 +283,8 @@ export async function retrieveContextForLesson(
     `instructor source material themes content ${moduleName}`,
     Math.ceil(count * 0.65)
   );
-  return mergeChunksById([focused, broad], count);
+  const merged = mergeChunksById([pageRange ? await retrieveChunksForPageRange(courseId, pageRange.start, pageRange.end, count) : [], focused, broad], count);
+  return merged;
 }
 
 /** Retrieve source context for course drafting from any uploaded material. */

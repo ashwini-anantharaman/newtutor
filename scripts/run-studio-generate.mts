@@ -23,7 +23,7 @@ async function listCourses() {
 async function waitForJob(id: string) {
   const deadline = Date.now() + 12 * 60 * 1000;
   while (Date.now() < deadline) {
-    const job = getStudioGenerateJob(id);
+    const job = await getStudioGenerateJob(id);
     if (!job) {
       console.log("No active job");
       return;

@@ -101,6 +101,56 @@ export function placeImagesOnPages(
   return next;
 }
 
+/** Place PDF-extracted figures into the module whose page range contains each figure. */
+export function placeFiguresOnPages(
+  pages: StudioPage[],
+  figures: { page: number; src: string; caption: string }[],
+  ranges: { title: string; start: number; end: number }[]
+): StudioPage[] {
+  if (!figures.length || !pages.length) return pages;
+
+  const next = pages.map((p) => ({ ...p, blocks: [...p.blocks] }));
+  const rangeFor = (title: string) => {
+    const exact = ranges.find((r) => r.title.toLowerCase() === title.toLowerCase());
+    if (exact) return exact;
+    return ranges.find(
+      (r) =>
+        title.toLowerCase().includes(r.title.toLowerCase()) ||
+        r.title.toLowerCase().includes(title.toLowerCase())
+    );
+  };
+
+  for (const page of next) {
+    const range = rangeFor(page.title);
+    if (!range) continue;
+    const figs = figures.filter((f) => f.page >= range.start && f.page <= range.end).slice(0, 5);
+    if (!figs.length) continue;
+
+    const studyIndices = page.blocks
+      .map((b, i) => (b.type === "study" ? i : -1))
+      .filter((i) => i >= 0);
+    const base = studyIndices[0] ?? 0;
+
+    const newBlocks = [...page.blocks];
+    let insertOffset = 0;
+    figs.forEach((fig, fi) => {
+      const afterStudy = studyIndices[Math.min(fi, Math.max(studyIndices.length - 1, 0))] ?? base;
+      const at = afterStudy + 1 + insertOffset;
+      newBlocks.splice(at, 0, {
+        id: uid(),
+        type: "image",
+        src: fig.src,
+        caption: fig.caption,
+        alt: fig.caption,
+      });
+      insertOffset++;
+    });
+    page.blocks = newBlocks;
+  }
+
+  return next;
+}
+
 export const DEFAULT_IMPORTANCE: ModuleImportance[] = [
   "core",
   "core",
