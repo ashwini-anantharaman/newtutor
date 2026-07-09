@@ -133,6 +133,11 @@ interface AppContextValue {
   clearPendingBuild: () => void;
   openStudentLesson: (conceptId?: string) => void;
   openStudentAssistant: () => void;
+  coachPanelOpen: boolean;
+  setCoachPanelOpen: (open: boolean) => void;
+  toggleCoachPanel: () => void;
+  lessonCoachFocus: { conceptId: string; conceptName: string } | null;
+  setLessonCoachFocus: (focus: { conceptId: string; conceptName: string } | null) => void;
   duplicateModule: (index: number) => Promise<void>;
   removeModule: (index: number) => Promise<void>;
 }
@@ -165,6 +170,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [lessonPanel, setLessonPanel] = useState<LessonPanel>("split");
   const [examDate, setExamDateState] = useState<string | null>(() => localStorage.getItem("owlwise-exam-date"));
   const [toast, setToast] = useState<string | null>(null);
+  const [coachPanelOpen, setCoachPanelOpen] = useState(true);
+  const [lessonCoachFocus, setLessonCoachFocus] = useState<{ conceptId: string; conceptName: string } | null>(null);
   const [pendingBuild, setPendingBuild] = useState<PendingBuild | null>(null);
 
   const showToast = useCallback((message: string) => {
@@ -236,6 +243,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             label: b.label,
             title: b.title,
             content: b.content,
+            masterySignal: (b.mastery_signal ?? "none") as "binary" | "none",
           })),
       };
     });
@@ -524,6 +532,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       title: block.title,
       content: block.content ?? {},
       sort_order: mod.blocks.length,
+      masterySignal: block.masterySignal,
     }) as ContentBlock;
     setModulesState((prev) =>
       prev.map((m, i) =>
@@ -544,6 +553,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         title: block.title,
         content: block.content ?? {},
         sort_order: mod.blocks.length + i,
+        masterySignal: block.masterySignal,
       }) as ContentBlock;
       createdBlocks.push({ ...block, id: created.id });
     }
@@ -741,8 +751,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setScreen("student-sets");
       return;
     }
-    setScreen("student-assistant");
+    setCoachPanelOpen(true);
   }, [courseId, showToast]);
+
+  const toggleCoachPanel = useCallback(() => {
+    setCoachPanelOpen((open) => !open);
+  }, []);
 
   const duplicateModule = useCallback(async (index: number) => {
     if (!courseId) return;
@@ -858,7 +872,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       screen, role, courseId, courseTitle, learner, instructor, ragSources, ragStatus, coursePublished, instructorCourses, studentEnrollments,
       modules, concepts, prerequisiteGraph, conceptAvailability, activeConceptId,
       createStep, currentModuleIndex, loading, dashboardData, loginIntent,
-      studentToolsTab, lessonPanel, examDate, toast, pendingBuild,
+      studentToolsTab, lessonPanel, examDate, toast, pendingBuild, coachPanelOpen, lessonCoachFocus,
       setScreen, setLoginIntent, login, register, logout, updateLearner, saveLearnerOnboarding, saveInstructorOnboarding,
       setLearnerMastery, logModeSwitch, completeReflection, updateInstructor,
       addRAGSource, uploadRAGFile, addRAGUrl, removeRAGSource, refreshSources, refreshRagStatus,
@@ -867,20 +881,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActiveConceptId, setDefaultModes, refreshDashboard, syncCourse, loadCourse, startNewCourse, openCourseEditor, hydrate,
       setStudentToolsTab, setLessonPanel, setExamDate,
       showToast, clearToast, queueBuild, clearPendingBuild, openStudentLesson, openStudentAssistant,
+      setCoachPanelOpen, toggleCoachPanel, setLessonCoachFocus,
       duplicateModule, removeModule,
     }),
     [
       screen, role, courseId, courseTitle, learner, instructor, ragSources, ragStatus, coursePublished, instructorCourses, studentEnrollments,
       modules, concepts, prerequisiteGraph, conceptAvailability, activeConceptId,
       createStep, currentModuleIndex, loading, dashboardData, loginIntent,
-      studentToolsTab, lessonPanel, examDate, toast, pendingBuild,
+      studentToolsTab, lessonPanel, examDate, toast, pendingBuild, coachPanelOpen, lessonCoachFocus,
       login, register, logout, updateLearner, saveLearnerOnboarding, saveInstructorOnboarding,
       setLearnerMastery, logModeSwitch, completeReflection, updateInstructor,
       addRAGSource, uploadRAGFile, addRAGUrl, removeRAGSource, refreshSources, refreshRagStatus,
       setModules, addBlockToModule, addBlocksToModule, removeBlockFromModule, reorderModules,
       publishCourse, joinCourseByCode, generateAllModules, draftCourseStructure, setDefaultModes, refreshDashboard, syncCourse, loadCourse, startNewCourse, openCourseEditor, hydrate,
       setStudentToolsTab, setLessonPanel, setExamDate,
-      showToast, clearToast, queueBuild, clearPendingBuild, openStudentLesson, openStudentAssistant, duplicateModule, removeModule,
+      showToast, clearToast, queueBuild, clearPendingBuild, openStudentLesson, openStudentAssistant,
+      toggleCoachPanel, duplicateModule, removeModule,
     ]
   );
 

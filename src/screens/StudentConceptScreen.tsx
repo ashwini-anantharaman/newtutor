@@ -38,12 +38,92 @@ import {
 } from "../lib/study-format";
 import { coerceStudyText } from "../lib/study-sections";
 import { STUDENT_LESSON_NAV, type LessonNavigation } from "./preview/lessonNavigation";
+import type { StudioCourseData } from "../learning/types";
+import { DataAPI } from "../lib/api";
+import { emptyStudio, isSkeletonStudio, modulesToStudioPages } from "../learning/load-studio";
+import { linkVocabInStudio } from "../learning/studio-vocab";
+import { StudentCoursePlayer } from "./student-course/StudentCoursePlayer";
 
 type StudentConceptScreenProps = {
   lessonNav?: LessonNavigation;
 };
 
 export function StudentConceptScreen({ lessonNav = STUDENT_LESSON_NAV }: StudentConceptScreenProps) {
+  const { courseId, activeConceptId, concepts, modules, setScreen } = useApp();
+  const [studio, setStudio] = useState<StudioCourseData | null>(null);
+  const [studioLoading, setStudioLoading] = useState(true);
+
+  const initialPageIndex = useMemo(() => {
+    if (!studio?.pages.length) return 0;
+    if (activeConceptId) {
+      const byModule = studio.pages.findIndex((p) => p.moduleId === activeConceptId || p.id === activeConceptId);
+      if (byModule >= 0) return byModule;
+      const concept = concepts.find((c) => c.id === activeConceptId);
+      if (concept) {
+        const byTitle = studio.pages.findIndex((p) => p.title === concept.name);
+        if (byTitle >= 0) return byTitle;
+      }
+    }
+    return 0;
+  }, [studio, activeConceptId, concepts]);
+
+  useEffect(() => {
+    if (!courseId) {
+      setStudioLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setStudioLoading(true);
+    DataAPI.getStudio(courseId)
+      .then((saved) => {
+        if (cancelled) return;
+        if (saved?.pages?.length && !isSkeletonStudio(saved)) {
+          setStudio(linkVocabInStudio(saved));
+          return;
+        }
+        if (modules.length > 0) {
+          setStudio({ ...emptyStudio(saved?.policy ?? "generate"), pages: modulesToStudioPages(modules) });
+        } else {
+          setStudio(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled && modules.length > 0) {
+          setStudio({ ...emptyStudio(), pages: modulesToStudioPages(modules) });
+        } else if (!cancelled) {
+          setStudio(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setStudioLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [courseId, modules]);
+
+  if (studioLoading) {
+    return (
+      <div className="student-course-root sc-loading">
+        <p>Loading your lesson…</p>
+      </div>
+    );
+  }
+
+  if (studio?.pages?.length) {
+    return (
+      <StudentCoursePlayer
+        studio={studio}
+        initialPageIndex={initialPageIndex}
+        onExit={() => setScreen(lessonNav.workspaceScreen)}
+      />
+    );
+  }
+
+  return <LegacyStudentConceptScreen lessonNav={lessonNav} />;
+}
+
+function LegacyStudentConceptScreen({ lessonNav = STUDENT_LESSON_NAV }: StudentConceptScreenProps) {
   const {
     activeConceptId,
     setActiveConceptId,

@@ -13,6 +13,8 @@ export const config = {
   generativeManimEnabled: process.env.GENERATIVE_MANIM_ENABLED !== "false",
   transcriptApiKey: process.env.TRANSCRIPT_API_KEY ?? "",
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
+  /** Max studio pages/modules to generate per course (textbooks may need ~18+). */
+  studioMaxModules: Number(process.env.STUDIO_MAX_MODULES ?? 24),
 };
 
 export function isGenerativeManimConfigured(): boolean {

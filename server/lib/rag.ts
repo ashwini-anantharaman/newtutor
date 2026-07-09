@@ -52,6 +52,7 @@ export async function ingestExtract(
     page_end: chunk.pageEnd ?? null,
     time_start: chunk.timeStart ?? null,
     time_end: chunk.timeEnd ?? null,
+    chunk_type: "explanation" as const,
   }));
 
   const INSERT_BATCH = 40;
@@ -61,8 +62,8 @@ export async function ingestExtract(
     if (error) {
       const msg = formatErrorMessage(error);
       // Migration 002 adds page/time columns — fall back for older schemas.
-      if (error.code === "PGRST204" && /page_|time_/.test(msg)) {
-        const legacy = batch.map(({ page_start, page_end, time_start, time_end, ...rest }) => rest);
+      if (error.code === "PGRST204" && /page_|time_|chunk_type|concept_ids|skill_ids/.test(msg)) {
+        const legacy = batch.map(({ page_start, page_end, time_start, time_end, chunk_type, concept_ids, skill_ids, ...rest }) => rest);
         const { error: legacyErr } = await supabaseAdmin.from("document_chunks").insert(legacy);
         if (legacyErr) throw new Error(formatErrorMessage(legacyErr));
       } else {
@@ -77,6 +78,14 @@ export async function ingestExtract(
     .eq("id", sourceId);
 }
 
+export type RagChunkType =
+  | "rule"
+  | "example"
+  | "explanation"
+  | "misconception"
+  | "hint_template"
+  | "drill_prompt";
+
 export interface RagChunk {
   id: string;
   content: string;
@@ -87,6 +96,9 @@ export interface RagChunk {
   page_end?: number | null;
   time_start?: number | null;
   time_end?: number | null;
+  conceptIds?: string[];
+  skillIds?: string[];
+  chunkType?: RagChunkType;
 }
 
 export async function getCourseRagStats(courseId: string) {
@@ -167,7 +179,7 @@ export async function retrieveAllCourseChunks(courseId: string): Promise<RagChun
   throw new Error(msg);
 }
 
-function mergeChunksById(lists: RagChunk[][], max: number): RagChunk[] {
+export function mergeChunksById(lists: RagChunk[][], max: number): RagChunk[] {
   const seen = new Set<string>();
   const merged: RagChunk[] = [];
   for (const list of lists) {

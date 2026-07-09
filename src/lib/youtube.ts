@@ -31,6 +31,14 @@ export function extractYouTubeId(input: string): string | null {
   return m?.[1] ?? null;
 }
 
+/** Standard YouTube thumbnail for an id or watch URL (no API key). */
+export function youtubeThumbnailUrl(input: string, quality: "default" | "hq" | "mq" | "sd" | "maxres" = "hq"): string | null {
+  const id = extractYouTubeId(input);
+  if (!id) return null;
+  const file = quality === "default" ? "default" : `${quality}default`;
+  return `https://img.youtube.com/vi/${id}/${file}.jpg`;
+}
+
 export function youtubeEmbedSrc(
   url: string,
   startSeconds?: number,

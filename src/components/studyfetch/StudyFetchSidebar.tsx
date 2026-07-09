@@ -8,6 +8,7 @@ import type { Screen } from "../../types";
 import { sf } from "../../constants/studyFetchTheme";
 import { OwlAnim } from "../owlwise/primitives";
 import { StudyFetchTopBar } from "./StudyFetchTopBar";
+import { StudentCoachPanel } from "./StudentCoachPanel";
 import { useApp } from "../../store/AppContext";
 
 type StudentNavId = "home" | "my-sets" | "calendar" | "practice-tools" | "your-classes" | "study-plan" | "chat";
@@ -29,7 +30,7 @@ const STUDENT_PRIMARY: NavItem[] = [
 
 const STUDENT_TOOLS: NavItem[] = [
   { icon: ListChecks, label: "Study Plan", navId: "study-plan", screen: "student-mastery" },
-  { icon: MessageCircle, label: "Chat", navId: "chat", screen: "student-assistant" },
+  { icon: MessageCircle, label: "Coach", navId: "chat", screen: "student-assistant" },
 ];
 
 const INSTRUCTOR_NAV: NavItem[] = [
@@ -44,6 +45,7 @@ function activeStudentNav(screen: Screen): StudentNavId | null {
     "student-courses": "home",
     "student-sets": "my-sets",
     "student-workspace": "your-classes",
+    "student-concept": "your-classes",
     "student-challenge": "calendar",
     "student-tools": "practice-tools",
     "student-assistant": "chat",
@@ -86,7 +88,7 @@ export function StudyFetchSidebar({
   onSwitchView?: () => void;
   studentPreviewActive?: boolean;
 }) {
-  const { setStudentToolsTab, openStudentAssistant, showToast, openCourseEditor, courseId } = useApp();
+  const { setStudentToolsTab, showToast, openCourseEditor, courseId, coachPanelOpen, toggleCoachPanel, setCoachPanelOpen } = useApp();
   const [collapsed, setCollapsed] = useState(false);
 
   const activeNavId = role === "student" ? activeStudentNav(screen) : activeInstructorNav(screen);
@@ -102,7 +104,12 @@ export function StudyFetchSidebar({
       return;
     }
     if (item.navId === "chat") {
-      openStudentAssistant();
+      if (!courseId) {
+        showToast("Open a course from My Sets first.");
+        setScreen("student-sets");
+        return;
+      }
+      toggleCoachPanel();
       return;
     }
     if (item.screen === "student-workspace" && role === "student" && !courseId) {
@@ -128,7 +135,7 @@ export function StudyFetchSidebar({
   };
 
   const navBtn = (item: NavItem) => {
-    const active = activeNavId === item.navId;
+    const active = item.navId === "chat" ? coachPanelOpen : activeNavId === item.navId;
     return (
       <button
         key={item.navId}
@@ -223,6 +230,12 @@ export function StudyFetchSidebar({
         {role === "student" && !collapsed && (
           <>
             <div className="my-3 border-t" style={{ borderColor: sf.border }} />
+            {STUDENT_TOOLS.map((item) => navBtn(item))}
+          </>
+        )}
+        {role === "student" && collapsed && (
+          <>
+            <div className="my-2 border-t" style={{ borderColor: sf.border }} />
             {STUDENT_TOOLS.map((item) => navBtn(item))}
           </>
         )}
@@ -346,7 +359,8 @@ export function StudyFetchShell({
           studentPreviewActive={studentPreviewActive}
         />
         <div className="flex-1 flex min-h-0 overflow-hidden">
-          <main className={`flex-1 overflow-y-auto ${fullWidth ? "" : "p-6"}`}>{children}</main>
+          <main className={`flex-1 min-h-0 overflow-y-auto ${fullWidth ? "" : "p-6"}`}>{children}</main>
+          {role === "student" && <StudentCoachPanel />}
           {rightRail && (
             <aside className="w-[300px] shrink-0 border-l overflow-y-auto p-4 space-y-4" style={{ borderColor: sf.border, backgroundColor: sf.bg }}>
               {rightRail}

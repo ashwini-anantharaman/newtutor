@@ -18,7 +18,7 @@ import { StudentSettingsScreen } from "../screens/StudentSettingsScreen";
 import { ReflectionScreen } from "../screens/ReflectionScreen";
 import { InstructorClassroomsScreen } from "../screens/InstructorClassroomsScreen";
 import { InstructorCourseModulesScreen } from "../screens/InstructorCourseModulesScreen";
-import { InstructorCreateScreen } from "../screens/InstructorCreateScreen";
+import { InstructorStudioScreen } from "../screens/studio/InstructorStudioScreen";
 import { InstructorChallengeScreen } from "../screens/InstructorChallengeScreen";
 import { InstructorSettingsScreen } from "../screens/InstructorSettingsScreen";
 import { TeacherDashboardScreen } from "../screens/TeacherDashboardScreen";
@@ -35,20 +35,20 @@ const STUDENT_SHELL_SCREENS: Screen[] = [
   "student-tools",
   "student-settings",
   "student-reflection",
+  "student-concept",
 ];
 
 const INSTRUCTOR_SHELL_SCREENS: Screen[] = [
   "instructor-home",
   "instructor-course",
   "instructor-preview",
-  "instructor-create",
   "instructor-dashboard",
   "instructor-challenge",
   "instructor-settings",
 ];
 
-const FULLSCREEN_STUDENT: Screen[] = ["student-concept"];
 const FULLSCREEN_INSTRUCTOR_PREVIEW: Screen[] = ["instructor-preview-concept"];
+const FULLSCREEN_INSTRUCTOR_STUDIO: Screen[] = ["instructor-create"];
 
 export default function App() {
   const {
@@ -112,12 +112,12 @@ export default function App() {
   if (screen === "student-onboarding") return <StudentOnboarding />;
   if (screen === "instructor-onboarding") return <InstructorOnboarding />;
 
-  if (role === "student" && FULLSCREEN_STUDENT.includes(screen)) {
-    if (screen === "student-concept") return <StudentConceptScreen />;
-  }
-
   if (role === "instructor" && FULLSCREEN_INSTRUCTOR_PREVIEW.includes(screen)) {
     if (screen === "instructor-preview-concept") return <PreviewConceptScreen />;
+  }
+
+  if (role === "instructor" && FULLSCREEN_INSTRUCTOR_STUDIO.includes(screen)) {
+    if (screen === "instructor-create") return <InstructorStudioScreen />;
   }
 
   const studentBreadcrumbs = () => {
@@ -127,13 +127,18 @@ export default function App() {
         { label: chapterLabel, sub: "Workspace" },
       ];
     }
+    if (screen === "student-concept") {
+      return [
+        { label: courseTitle, sub: "Classroom", onClick: () => setScreen("student-workspace") },
+        { label: "Lesson", sub: "In progress" },
+      ];
+    }
     return undefined;
   };
 
   const instructorBreadcrumbs = () => {
     if (
       screen === "instructor-course" ||
-      screen === "instructor-create" ||
       screen === "instructor-preview" ||
       screen === "instructor-preview-concept" ||
       screen === "instructor-challenge"
@@ -161,6 +166,7 @@ export default function App() {
       {screen === "student-tools" && <StudentToolsScreen />}
       {screen === "student-settings" && <StudentSettingsScreen />}
       {screen === "student-reflection" && <ReflectionScreen />}
+      {screen === "student-concept" && <StudentConceptScreen />}
     </>
   );
 
@@ -169,7 +175,6 @@ export default function App() {
       {screen === "instructor-home" && <InstructorClassroomsScreen />}
       {screen === "instructor-course" && <InstructorCourseModulesScreen />}
       {screen === "instructor-preview" && <PreviewWorkspaceScreen />}
-      {screen === "instructor-create" && <InstructorCreateScreen />}
       {screen === "instructor-dashboard" && <TeacherDashboardScreen />}
       {screen === "instructor-challenge" && <InstructorChallengeScreen />}
       {screen === "instructor-settings" && <InstructorSettingsScreen />}
@@ -190,6 +195,7 @@ export default function App() {
         toast={toast}
         onDocuments={handleDocuments}
         onUpgrade={handleUpgrade}
+        fullWidth={screen === "student-concept"}
       >
         {studentContent}
       </StudyFetchShell>
@@ -207,7 +213,6 @@ export default function App() {
         userInitials={userInitials}
         courseTitle={courseTitle}
         breadcrumbs={instructorBreadcrumbs()}
-        fullWidth={screen === "instructor-create"}
         onSwitchView={handleInstructorViewSwitch}
         studentPreviewActive={screen === "instructor-preview" || screen === "instructor-preview-concept"}
         toast={toast}

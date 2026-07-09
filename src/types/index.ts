@@ -108,6 +108,7 @@ export interface ContentBlock {
   label: string;
   title?: string;
   content?: Record<string, unknown>;
+  masterySignal?: "binary" | "none";
 }
 export interface ConceptAvailability {
   modes: ContentMode[];

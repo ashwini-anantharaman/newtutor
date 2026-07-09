@@ -8,7 +8,13 @@ import { extractYouTubeId, isYouTubeUrl } from "../lib/youtube.js";
 import { getCourseRagStats, ingestExtract } from "../lib/rag.js";
 import { formatErrorMessage } from "../lib/errors.js";
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+/** Max source upload size (PDFs, docs, audio). Brain Facts high-res ~66MB. */
+const MAX_SOURCE_UPLOAD_BYTES = 100 * 1024 * 1024;
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_SOURCE_UPLOAD_BYTES },
+});
 const router = Router();
 
 const SOURCES_BUCKET = "sources";
@@ -16,9 +22,17 @@ const SOURCES_BUCKET = "sources";
 type PdfSourceRow = { id: string; name: string; type: string; storage_path: string | null; status: string };
 
 async function ensureSourcesBucket() {
-  const { error } = await supabaseAdmin.storage.createBucket(SOURCES_BUCKET, { public: false });
+  const fileSizeLimit = MAX_SOURCE_UPLOAD_BYTES;
+  const { error } = await supabaseAdmin.storage.createBucket(SOURCES_BUCKET, {
+    public: false,
+    fileSizeLimit,
+  });
   if (error && !/already exists|duplicate/i.test(error.message)) {
     console.warn(`[rag] Could not ensure "${SOURCES_BUCKET}" bucket:`, error.message);
+  }
+  const { error: updateErr } = await supabaseAdmin.storage.updateBucket(SOURCES_BUCKET, { fileSizeLimit });
+  if (updateErr && !/not found/i.test(updateErr.message)) {
+    console.warn(`[rag] Could not update "${SOURCES_BUCKET}" file size limit:`, updateErr.message);
   }
 }
 
@@ -299,6 +313,44 @@ router.post("/course/:courseId/sources/url", requireAuth, async (req: AuthedRequ
         await supabaseAdmin
           .from("sources")
           .update({ status: "error", detail: message.slice(0, 500) })
+          .eq("id", source.id);
+      }
+    })();
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+router.post("/course/:courseId/sources/text", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const courseId = String(req.params.courseId);
+    const { text, name } = req.body as { text?: string; name?: string };
+    if (!text?.trim()) {
+      res.status(400).json({ error: "text is required" });
+      return;
+    }
+    const wordCount = text.trim().split(/\s+/).length;
+    const displayName = name?.trim() || `Pasted text (${wordCount} words)`;
+    const { data: source, error } = await supabaseAdmin
+      .from("sources")
+      .insert({
+        course_id: courseId,
+        name: displayName,
+        type: "Text",
+        status: "indexing",
+        detail: "Processing…",
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(source);
+    (async () => {
+      try {
+        await ingestExtract(courseId, source.id, { segments: [{ text: text.trim() }], kind: "text" }, displayName);
+      } catch (e) {
+        await supabaseAdmin
+          .from("sources")
+          .update({ status: "error", detail: formatErrorMessage(e).slice(0, 500) })
           .eq("id", source.id);
       }
     })();

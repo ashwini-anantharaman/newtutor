@@ -10,7 +10,7 @@ import {
   isValidMcqBlock,
   type LessonBlueprint,
 } from "../lib/lessonNormalize.js";
-import { formatRetrievedContext, getCourseRagStats, retrieveContextForDraft, retrieveContextForLesson, type RagChunk } from "../lib/rag.js";
+import { formatRetrievedContext, getCourseRagStats, mergeChunksById, retrieveChunks, retrieveContextForDraft, retrieveContextForLesson, type RagChunk } from "../lib/rag.js";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { difficultyForMastery } from "../lib/mastery.js";
 import { isGenerativeManimConfigured } from "../lib/config.js";
@@ -148,15 +148,27 @@ export async function draftCourseStructure(
     );
   }
 
-  const chunks = await retrieveContextForDraft(courseId, prompt, 8);
+  const [structureChunks, tocChunks, headingChunks] = await Promise.all([
+    retrieveContextForDraft(courseId, prompt, 16),
+    retrieveChunks(courseId, "table of contents chapter list section headings parts units", 14),
+    retrieveChunks(courseId, "chapter title part unit section introduction overview", 10),
+  ]);
+  const chunks = mergeChunksById([structureChunks, tocChunks, headingChunks], 28);
   let context = formatRetrievedContext(chunks);
-  if (context.length > 14_000) {
-    context = `${context.slice(0, 14_000)}\n\n[... additional source text omitted — derive structure from the excerpts above]`;
+  if (context.length > 18_000) {
+    context = `${context.slice(0, 18_000)}\n\n[... additional source text omitted — derive structure from the excerpts above]`;
   }
   const raw = await claudeJSON<unknown>(
     `You are the LAIC AI Course Drafter. Build a course structure entirely from the instructor's uploaded sources — any subject (essays, articles, textbooks, business, humanities, STEM, etc.).
 Module names and chapters must reflect what the sources actually contain. Do not invent an unrelated domain.
-Keep the structure compact: 2-4 chapters, 3-10 modules total, short module names (≤ 6 words), minimal prereqs.
+
+TEXTBOOKS: If sources are a multi-chapter book (table of contents, numbered chapters, Brain Facts, textbook PDF, etc.):
+- Create one chapter group per book chapter (e.g. CH 1 … CH 18).
+- Create exactly one module per chapter, using the book's chapter title (shortened if needed, ≤ 8 words).
+- Do NOT collapse an 18-chapter book into 3–4 broad modules.
+
+SHORTER MATERIALS: For articles, essays, or small uploads without a TOC, use 3–10 modules in 2–4 chapter groups.
+
 Return JSON:
 {
   "title": string,

@@ -247,6 +247,36 @@ router.get("/course/:courseId/full", requireAuth, async (req, res) => {
   });
 });
 
+router.get("/course/:courseId/studio", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const studio = await import("../agents/studioGenerator.js").then((m) =>
+      m.loadStudioCourse(String(req.params.courseId))
+    );
+    res.json(studio ?? { policy: "generate", pages: [], tools: [], vocab: [], cards: [] });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+router.put("/course/:courseId/studio", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const courseId = String(req.params.courseId);
+    const { data: course } = await supabaseAdmin
+      .from("courses")
+      .select("instructor_id")
+      .eq("id", courseId)
+      .single();
+    if (!course || course.instructor_id !== req.userId) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    await import("../agents/studioGenerator.js").then((m) => m.saveStudioCourse(courseId, req.body));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 router.post("/learner/onboarding", requireAuth, async (req: AuthedRequest, res) => {
   const { age, goal, defaultMode, sessionLength } = req.body;
   const { error } = await supabaseAdmin.from("learner_models").upsert({
@@ -545,10 +575,18 @@ router.post("/course/:courseId/modules", requireAuth, async (req: AuthedRequest,
 });
 
 router.post("/modules/:moduleId/blocks", requireAuth, async (req, res) => {
-  const { type, label, title, content, sort_order } = req.body;
+  const { type, label, title, content, sort_order, masterySignal } = req.body;
   const { data, error } = await supabaseAdmin
     .from("content_blocks")
-    .insert({ module_id: req.params.moduleId, type, label, title, content: content ?? {}, sort_order: sort_order ?? 0 })
+    .insert({
+      module_id: req.params.moduleId,
+      type,
+      label,
+      title,
+      content: content ?? {},
+      sort_order: sort_order ?? 0,
+      mastery_signal: masterySignal ?? "none",
+    })
     .select()
     .single();
   if (error) return res.status(500).json({ error: error.message });

@@ -125,6 +125,14 @@ export const DataAPI = {
     api<{ students: { userId: string; name: string; email: string; masteredCount: number; conceptCount: number }[] }>(
       `/course/${courseId}/students`
     ),
+  getStudio: (courseId: string) => api<import("../learning/types").StudioCourseData>(`/course/${courseId}/studio`),
+  saveStudio: (courseId: string, body: unknown) =>
+    api(`/course/${courseId}/studio`, { method: "PUT", body: JSON.stringify(body) }),
+  pasteSourceText: (courseId: string, text: string, name?: string) =>
+    api(`/rag/course/${courseId}/sources/text`, {
+      method: "POST",
+      body: JSON.stringify({ text, name }),
+    }),
 };
 
 export const AgentAPI = {
@@ -206,4 +214,48 @@ export const AgentAPI = {
   generateScene3D: (body: unknown) =>
     api("/agents/animation/generate-3d", { method: "POST", body: JSON.stringify(body) }),
   modeSwitch: (body: unknown) => api("/agents/mode-switch", { method: "POST", body: JSON.stringify(body) }),
+  generateStudioCourse: (courseId: string, policy: string, prompt?: string) =>
+    api<{ started: boolean; status: string; progress?: string }>("/agents/studio/generate-course", {
+      method: "POST",
+      body: JSON.stringify({ courseId, policy, prompt }),
+    }),
+  studioGenerateStatus: (courseId: string) =>
+    api<{
+      status: "idle" | "running" | "done" | "error";
+      progress?: string;
+      moduleIndex?: number;
+      moduleTotal?: number;
+      studio?: import("../learning/types").StudioCourseData;
+      error?: string;
+    }>(`/agents/studio/generate-status/${courseId}`),
+  studioAssist: (body: {
+    courseId: string;
+    policy: string;
+    fieldLabel: string;
+    currentValue: string;
+    instruction: string;
+  }) => api<{ text: string }>("/agents/studio/assist", { method: "POST", body: JSON.stringify(body) }),
+  studioGenerateToolItems: (body: {
+    courseId: string;
+    policy: string;
+    kind: string;
+    pageTitles: string[];
+    existing: unknown[];
+  }) => api<{ items: unknown[] }>("/agents/studio/generate-tool-items", { method: "POST", body: JSON.stringify(body) }),
+  studioSuggestions: (body: {
+    courseId: string;
+    policy: string;
+    pageTitle: string;
+    pageSummary?: string;
+  }) =>
+    api<{ videos: { title: string; why: string; source: string; duration?: string; youtubeUrl?: string; thumbnailUrl?: string }[]; images: { title: string; why: string; source: string; imageUrl?: string }[] }>(
+      "/agents/studio/suggestions",
+      { method: "POST", body: JSON.stringify(body) }
+    ),
+  uploadStudioImage: (courseId: string, file: File) => {
+    const fd = new FormData();
+    fd.append("courseId", courseId);
+    fd.append("file", file);
+    return apiUpload(`/agents/studio/upload-image`, fd) as Promise<{ url: string; storagePath: string }>;
+  },
 };

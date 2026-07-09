@@ -1,4 +1,6 @@
 import { Router } from "express";
+import multer from "multer";
+import { randomUUID } from "crypto";
 import type { AuthedRequest } from "../middleware/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import * as orchestrator from "../agents/orchestrator.js";
@@ -14,8 +16,20 @@ import * as animationManim from "../agents/animationManim.js";
 import { isGenerativeManimConfigured } from "../lib/config.js";
 import { formatErrorMessage } from "../lib/errors.js";
 import * as studyFormatter from "../agents/studyFormatter.js";
+import * as studioGenerator from "../agents/studioGenerator.js";
+import { isSkeletonStudio } from "../../shared/studio/skeleton.js";
+import { supabaseAdmin } from "../lib/supabase.js";
 
 const router = Router();
+const imageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const STUDIO_IMAGES_BUCKET = "sources";
+
+async function ensureStudioImagesBucket() {
+  const { error } = await supabaseAdmin.storage.createBucket(STUDIO_IMAGES_BUCKET, { public: false });
+  if (error && !/already exists|duplicate/i.test(error.message)) {
+    console.warn(`[studio] Could not ensure "${STUDIO_IMAGES_BUCKET}" bucket:`, error.message);
+  }
+}
 
 router.post("/orchestrator/intent", requireAuth, async (req: AuthedRequest, res) => {
   try {
@@ -415,6 +429,177 @@ router.post("/animation/generate-3d", requireAuth, async (req: AuthedRequest, re
     res.json(scene3d);
   } catch (e) {
     res.status(500).json({ error: String(e) });
+  }
+});
+
+router.post("/studio/generate-course", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const { courseId, policy, prompt } = req.body as {
+      courseId?: string;
+      policy?: "strict" | "generate" | "open";
+      prompt?: string;
+    };
+    if (!courseId) {
+      res.status(400).json({ error: "courseId is required" });
+      return;
+    }
+    const { data: course } = await supabaseAdmin
+      .from("courses")
+      .select("instructor_id")
+      .eq("id", courseId)
+      .single();
+    if (!course || course.instructor_id !== req.userId) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const job = studioGenerator.startStudioGenerateJob(
+      courseId,
+      policy ?? "generate",
+      prompt
+    );
+    res.json({
+      started: true,
+      status: job.status,
+      progress: job.progress,
+    });
+  } catch (e) {
+    res.status(500).json({ error: formatErrorMessage(e) });
+  }
+});
+
+router.get("/studio/generate-status/:courseId", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const courseId = String(req.params.courseId);
+    const { data: course } = await supabaseAdmin
+      .from("courses")
+      .select("instructor_id")
+      .eq("id", courseId)
+      .single();
+    if (!course || course.instructor_id !== req.userId) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const job = studioGenerator.getStudioGenerateJob(courseId);
+    if (!job) {
+      const saved = await studioGenerator.loadStudioCourse(courseId);
+      if (saved?.pages?.length) {
+        res.json({ status: "done", studio: saved, progress: "Course ready" });
+        return;
+      }
+      res.json({ status: "idle" });
+      return;
+    }
+    if (job.status === "done" && job.studio && isSkeletonStudio(job.studio)) {
+      res.json({
+        status: "error",
+        error: "Generation produced placeholder content only — retry after fixing API credits or sources.",
+        progress: job.progress,
+      });
+      return;
+    }
+    res.json({
+      status: job.status,
+      progress: job.progress,
+      moduleIndex: job.moduleIndex,
+      moduleTotal: job.moduleTotal,
+      studio: job.status === "done" ? job.studio : undefined,
+      error: job.error,
+    });
+  } catch (e) {
+    res.status(500).json({ error: formatErrorMessage(e) });
+  }
+});
+
+router.post("/studio/assist", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const { courseId, policy, fieldLabel, currentValue, instruction } = req.body;
+    if (!courseId || !instruction) {
+      res.status(400).json({ error: "courseId and instruction are required" });
+      return;
+    }
+    const text = await studioGenerator.studioAssist(
+      courseId,
+      policy ?? "generate",
+      fieldLabel ?? "field",
+      currentValue ?? "",
+      instruction
+    );
+    res.json({ text });
+  } catch (e) {
+    res.status(500).json({ error: formatErrorMessage(e) });
+  }
+});
+
+router.post("/studio/generate-tool-items", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const { courseId, policy, kind, pageTitles, existing } = req.body;
+    if (!courseId || !kind) {
+      res.status(400).json({ error: "courseId and kind are required" });
+      return;
+    }
+    const items = await studioGenerator.generateToolItems(
+      courseId,
+      policy ?? "generate",
+      kind,
+      pageTitles ?? [],
+      existing ?? []
+    );
+    res.json({ items });
+  } catch (e) {
+    res.status(500).json({ error: formatErrorMessage(e) });
+  }
+});
+
+router.post("/studio/suggestions", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const { courseId, policy, pageTitle, pageSummary } = req.body as {
+      courseId?: string;
+      policy?: "strict" | "generate" | "open";
+      pageTitle?: string;
+      pageSummary?: string;
+    };
+    if (!courseId || !pageTitle) {
+      res.status(400).json({ error: "courseId and pageTitle are required" });
+      return;
+    }
+    const suggestions = await studioGenerator.generateStudioSuggestions(
+      courseId,
+      policy ?? "generate",
+      pageTitle,
+      pageSummary
+    );
+    res.json(suggestions);
+  } catch (e) {
+    res.status(500).json({ error: formatErrorMessage(e) });
+  }
+});
+
+router.post("/studio/upload-image", requireAuth, imageUpload.single("file"), async (req: AuthedRequest, res) => {
+  try {
+    const { courseId } = req.body as { courseId?: string };
+    const file = req.file;
+    if (!courseId) return res.status(400).json({ error: "courseId is required" });
+    if (!file) return res.status(400).json({ error: "No file" });
+    if (!file.mimetype.startsWith("image/")) {
+      return res.status(400).json({ error: "Only image files are allowed" });
+    }
+
+    await ensureStudioImagesBucket();
+    const safeName = file.originalname.replace(/[^\w.\-() ]+/g, "_") || "image";
+    const storagePath = `${courseId}/studio-images/${randomUUID()}-${safeName}`;
+    const { error: uploadErr } = await supabaseAdmin.storage
+      .from(STUDIO_IMAGES_BUCKET)
+      .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+    if (uploadErr) throw uploadErr;
+
+    const { data, error: urlErr } = await supabaseAdmin.storage
+      .from(STUDIO_IMAGES_BUCKET)
+      .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
+    if (urlErr || !data?.signedUrl) throw urlErr ?? new Error("Could not create image URL");
+
+    res.json({ url: data.signedUrl, storagePath });
+  } catch (e) {
+    res.status(500).json({ error: formatErrorMessage(e) });
   }
 });
 
